@@ -4,7 +4,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const { HttpsProxyAgent } = require('https-proxy-agent');
-const { processTask } = require('./taskProcessor');
+const { processTask, runAllTasks } = require('./taskProcessor');
 const app = express();
 
 const logBuffer = [];
@@ -347,6 +347,19 @@ app.use(function (err, req, res, next) {
     res.status(500).send('Internal Serverless Error');
   });
   
+  const pollIntervalMs = (parseInt(process.env.POLL_INTERVAL_MS, 10) > 0 ? parseInt(process.env.POLL_INTERVAL_MS, 10) : 60) * 1000;
+
   app.listen(6002, () => {
     console.log(`Server start on http://localhost:6002`);
+    console.log(`[poll] scheduler started, interval=${Math.floor(pollIntervalMs / 1000)}s`);
+
+    runAllTasks()
+      .then((ret) => console.log('[poll] initial run done', ret.summary))
+      .catch((err) => console.error('[poll] initial run error', err));
+
+    setInterval(() => {
+      runAllTasks()
+        .then((ret) => console.log('[poll] tick done', ret.summary))
+        .catch((err) => console.error('[poll] tick error', err));
+    }, pollIntervalMs);
   });
