@@ -222,6 +222,8 @@ async function runAllTasks() {
   const tasks = loadTasks();
   let tasksUpdated = false;
 
+  console.log(`[poll] tick start, tasks=${tasks.length}, time=${new Date().toISOString()}`);
+
   const summary = {
     total: tasks.length,
     success: 0,
