@@ -1,7 +1,12 @@
 const dayjs = require("dayjs");
+const utc = require("dayjs/plugin/utc");
+const timezone = require("dayjs/plugin/timezone");
+dayjs.extend(utc);
+dayjs.extend(timezone);
+dayjs.tz.setDefault("Asia/Shanghai");
+
 const rssParser = require("rss-parser");
 const turndown = require("turndown");
-const Api2d = require("api2d");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 const fetch = require("cross-fetch");
 const FormData = require("form-data");
@@ -9,6 +14,7 @@ const fs = require("fs");
 const path = require("path");
 
 const DATA_FILE = path.join(__dirname, "data", "tasks.json");
+const FILTERED_FILE = path.join(__dirname, "data", "filtered_messages.json");
 const RSS_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
@@ -36,10 +42,29 @@ function saveTasks(tasks) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(tasks));
 }
 
+function saveFilteredMessage(data) {
+  let list = [];
+  if (fs.existsSync(FILTERED_FILE)) {
+    try {
+      const raw = fs.readFileSync(FILTERED_FILE, "utf8").trim();
+      if (raw) list = JSON.parse(raw);
+    } catch (e) {
+      list = [];
+    }
+  }
+  list.unshift({
+    ...data,
+    saved_at: dayjs().tz().format("YYYY-MM-DD HH:mm:ss"),
+  });
+  // 最多保存 500 条
+  if (list.length > 500) list = list.slice(0, 500);
+  fs.writeFileSync(FILTERED_FILE, JSON.stringify(list, null, 2));
+}
+
 function shouldRunTask(task, isTest = false) {
   if (isTest) return true;
   if (!task.last_time) return true;
-  return dayjs(task.last_time).add(task.minutes, "minutes").isBefore(dayjs());
+  return dayjs(task.last_time).add(task.minutes, "minutes").isBefore(dayjs().tz());
 }
 
 function createParser() {
@@ -63,23 +88,34 @@ function createParser() {
 function passKeywordFilter(task, title = "") {
   const lowerTitle = String(title).toLowerCase();
 
-  if (task.keyword) {
-    const keywords = task.keyword.toLowerCase().split("|");
-    const matched = keywords.some((keyword) => lowerTitle.indexOf(keyword) >= 0);
-    if (!matched) {
-      return { pass: false, message: `白名单跳过，${task.keyword}` };
-    }
-  }
-
+  // 1. 先检查黑名单
   if (task.bad_keyword) {
-    const badKeywords = task.bad_keyword.toLowerCase().split("|");
-    const matched = badKeywords.some((keyword) => lowerTitle.indexOf(keyword) >= 0);
-    if (matched) {
-      return { pass: false, message: `黑名单跳过，${task.bad_keyword}` };
+    const badKeywords = task.bad_keyword.toLowerCase().split(",").map(k => k.trim()).filter(Boolean);
+    const badMatched = badKeywords.some((keyword) => lowerTitle.indexOf(keyword) >= 0);
+    if (badMatched) {
+      return { pass: false, action: "save_local", message: `命中黑名单 "${task.bad_keyword}"，已保存到本地` };
     }
   }
 
-  return { pass: true };
+  // 2. 再检查白名单
+  // 如果白名单为空，则全部推送到渠道
+  if (!task.keyword) {
+    return { pass: true };
+  }
+
+  // 逗号分隔的关键词
+  const keywords = task.keyword.toLowerCase().split(",").map(k => k.trim()).filter(Boolean);
+  if (keywords.length === 0) {
+    return { pass: true };
+  }
+
+  const matched = keywords.some((keyword) => lowerTitle.indexOf(keyword) >= 0);
+  if (matched) {
+    return { pass: true };
+  } else {
+    // 没命中白名单，标记为需要保存到本地
+    return { pass: false, action: "save_local", message: `未命中白名单 "${task.keyword}"，已保存到本地` };
+  }
 }
 
 async function sendByKey({ skey, task, last, text, desp, short }) {
@@ -218,7 +254,7 @@ async function processTask(task, isTest = false) {
         if (dedupedLatestIds.length >= maxHistory) break;
       }
 
-      task.last_time = dayjs().format("YYYY-MM-DD HH:mm:ss");
+      task.last_time = dayjs().tz().format("YYYY-MM-DD HH:mm:ss");
       task.last_content = latestContentId || task.last_content || "";
       task.last_contents = dedupedLatestIds;
     }
@@ -234,8 +270,27 @@ async function processTask(task, isTest = false) {
 
     const last = effectiveItem;
 
+    const c = new turndown();
+    const hideTitle = parseInt(task.hide_title) > 0;
+    const text = hideTitle ? "" : `${last.title || "RSS 更新"}`;
+    const short = hideTitle ? "" : `${last.title || ""}`.substring(0, 64);
+    const out = last.content || "";
+    // 构建正文，不再在开头加上 title，因为推送系统的 text 字段通常已经包含了 title
+    // 这样可以避免出现“双标题”的问题
+    const markdownContent = c.turndown(out).replace(/(\n\s*){2,}/g, '\n').trim();
+    let desp = `${markdownContent}\n${last.link || ""}`;
+
     const keywordCheck = passKeywordFilter(task, last.title || "");
     if (!keywordCheck.pass) {
+      if (keywordCheck.action === "save_local") {
+        saveFilteredMessage({
+          task_id: task.id,
+          task_title: task.title,
+          title: last.title,
+          link: last.link,
+          content: desp,
+        });
+      }
       console.log(keywordCheck.message);
       return { success: false, skipped: true, message: keywordCheck.message };
     }
@@ -245,26 +300,6 @@ async function processTask(task, isTest = false) {
       .map((item) => item.trim())
       .filter(Boolean);
     const uniqueKeys = [...new Set(keys)];
-
-    const c = new turndown();
-    const text = `${last.title || "RSS 更新"}`;
-    const short = `${last.title || ""}`.substring(0, 64);
-    const out = last.content || "";
-    // 构建正文，不再在开头加上 title，因为推送系统的 text 字段通常已经包含了 title
-    // 这样可以避免出现“双标题”的问题
-    const markdownContent = c.turndown(out).replace(/(\n\s*){2,}/g, '\n').trim();
-    let desp = `${markdownContent}\n${last.link || ""}`;
-
-    if (last.content && parseInt(task.translate) > 0 && process.env.OPENAI_KEY) {
-      // 翻译时建议带上标题，以获得更好的上下文
-      const toTranslate = `${last.title || ""}\n\n${markdownContent}`;
-      const maxLen = parseInt(process.env.TRANSLATE_MAX_LEN) > 10 ? parseInt(process.env.TRANSLATE_MAX_LEN) : 8000;
-      const ret0 = await translate(toTranslate.substring(0, maxLen));
-      if (ret0 && ret0.result) {
-        // 翻译结果 + 分隔线 + 原始正文
-        desp = `${ret0.result}\n\n---\n\n${desp}`;
-      }
-    }
 
     const sendResults = [];
     for (const skey of uniqueKeys) {
@@ -313,50 +348,6 @@ async function runAllTasks() {
   }
 
   return { success: true, summary };
-}
-
-async function translate(markdown) {
-  const llm = new Api2d(process.env.OPENAI_KEY, process.env.OPENAI_API_BASE);
-  const prompt = `
-# Task 请将Markdown清理掉样式和广告后翻译为中文
-
-# RULES
-
-1. 不要修改原始Markdown的格式，务必保留其中的图片、链接、视频等格式
-1. 去掉输入内容中多余的CSS和HTML标签
-1. 去掉原始内容中的广告和推广内容，比如购买会员、下载APP等
-1. 专有名词保留，无需翻译
-
-# INPUT
-
-\`\`\`md
-${markdown}
-\`\`\`
-
-# OUTPUT
-
-翻译结果：`;
-
-  const ret = await llm.completion({
-    model: markdown.length > 3000 ? "gpt-3.5-turbo-16k" : "gpt-3.5-turbo",
-    messages: [
-      {
-        role: "system",
-        content: "你是世界一流的翻译家，精通将各国语言翻译为中文。",
-      },
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
-    stream: true,
-    onMessage: (string, char) => {
-      process.stdout.write(char);
-    },
-  });
-
-  if (ret) return { result: ret };
-  return false;
 }
 
 async function sc_send(text, desp, short, key) {

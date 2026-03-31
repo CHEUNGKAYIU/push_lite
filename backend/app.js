@@ -1,5 +1,12 @@
 
 const rssParser = require('rss-parser');
+const dayjs = require('dayjs');
+const utc = require('dayjs/plugin/utc');
+const timezone = require('dayjs/plugin/timezone');
+dayjs.extend(utc);
+dayjs.extend(timezone);
+dayjs.tz.setDefault('Asia/Shanghai');
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
@@ -11,7 +18,7 @@ const logBuffer = [];
 const LOG_MAX_LINES = 500;
 
 function appendLog(message) {
-    const line = `[${new Date().toISOString()}] ${message}`;
+    const line = `[${dayjs().tz().format('YYYY-MM-DD HH:mm:ss')}] ${message}`;
     logBuffer.push(line);
     if (logBuffer.length > LOG_MAX_LINES) {
         logBuffer.shift();

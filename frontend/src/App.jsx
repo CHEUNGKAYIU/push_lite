@@ -178,7 +178,7 @@ const App = () => {
     const formData = new FormData(e.target);
     const data = Object.fromEntries(formData.entries());
     data.key = adminKey;
-    data.translate = data.translate ? 1 : 0;
+    data.hide_title = data.hide_title ? 1 : 0;
 
     const endpoint = currentTask ? '/task/modify' : '/task/add';
     if (currentTask) data.id = currentTask.id;
@@ -325,7 +325,7 @@ const App = () => {
                   <div className="flex gap-2">
                     {task.keyword && <span className="text-[10px] px-2 py-1 bg-blue-100 text-blue-700 rounded-md font-bold">白名单</span>}
                     {task.bad_keyword && <span className="text-[10px] px-2 py-1 bg-slate-200 text-slate-600 rounded-md font-bold">黑名单</span>}
-                    {task.translate > 0 && <span className="text-[10px] px-2 py-1 bg-amber-100 text-amber-700 rounded-md font-bold">翻译</span>}
+                    {task.hide_title > 0 && <span className="text-[10px] px-2 py-1 bg-rose-100 text-rose-700 rounded-md font-bold">隐藏标题</span>}
                   </div>
                   <button 
                     onClick={() => handleTest(task)}
@@ -396,9 +396,9 @@ const App = () => {
                   <input required type="number" name="minutes" defaultValue={currentTask?.minutes || 30} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none" />
                 </div>
                 <div className="space-y-2 flex flex-col justify-end">
-                   <label className="flex items-center gap-2 cursor-pointer py-3.5 group">
-                      <input type="checkbox" name="translate" defaultChecked={currentTask?.translate > 0} className="w-5 h-5 rounded-md border-slate-300 text-indigo-600 focus:ring-indigo-500" />
-                      <span className="text-sm font-bold text-slate-700 group-hover:text-indigo-600">开启 AI 翻译</span>
+                   <label className="flex items-center gap-2 cursor-pointer py-1.5 group">
+                      <input type="checkbox" name="hide_title" defaultChecked={currentTask?.hide_title > 0} className="w-5 h-5 rounded-md border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                      <span className="text-sm font-bold text-slate-700 group-hover:text-indigo-600">隐藏推送标题</span>
                    </label>
                 </div>
               </div>
@@ -410,12 +410,12 @@ const App = () => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">关键词包含 (白名单)</label>
-                  <input name="keyword" defaultValue={currentTask?.keyword} placeholder="关键词1|关键词2" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none" />
+                  <label className="text-sm font-bold text-slate-700">关键词白名单 (英文逗号分隔，命中则推送，未命中则保存到本地，为空全推)</label>
+                  <input name="keyword" defaultValue={currentTask?.keyword} placeholder="a,b,c" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">关键词排除 (黑名单)</label>
-                  <input name="bad_keyword" defaultValue={currentTask?.bad_keyword} placeholder="关键词1|关键词2" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none" />
+                  <label className="text-sm font-bold text-slate-700">关键词黑名单 (英文逗号分隔，命中则不推送并保存到本地)</label>
+                  <input name="bad_keyword" defaultValue={currentTask?.bad_keyword} placeholder="x,y,z" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none" />
                 </div>
               </div>
 

@@ -1,0 +1,29 @@
+# RSS Push 更新与维护指南
+
+## 1. 强制更新代码 (Git)
+如果你在服务器上修改了代码，或者想放弃本地修改强制同步 GitHub 上的代码：
+
+```bash
+# 获取远程最新代码
+git fetch origin
+
+# 强制重置本地分支到远程 main 分支
+git reset --hard origin/main
+```
+
+## 2. Docker 容器更新 (重构容器)
+当你修改了后端代码、前端代码或 `docker-compose.yml` 文件后，需要重新构建容器使修改生效：
+
+```bash
+# 停止并移除旧容器
+docker-compose down
+
+# 重新构建并后台启动容器
+docker-compose up --build -d
+```
+
+## 3. 日常维护
+- **查看日志**: `docker-compose logs -f`
+- **查看容器状态**: `docker ps`
+- **过滤后的消息**: 存储在 `backend/data/filtered_messages.json`
+- **任务配置**: 存储在 `backend/data/tasks.json`
