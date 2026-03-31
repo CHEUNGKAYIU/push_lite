@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  rsspush:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rsspush
+    restart: unless-stopped
+    ports:
+      - "6002:6002"
+    environment:
+      TZ: Asia/Shanghai
+      ADMIN_KEY: "admin7890"
+      RSS_BASE: "https://rsshub.app"
+      # Optional proxy
+      # HTTP_PROXY: "http://127.0.0.1:7890"
+      # HTTPS_PROXY: "http://127.0.0.1:7890"
+
+      # Optional translate (used when task.translate > 0)
+      # OPENAI_KEY: ""
+      # OPENAI_API_BASE: "https://openai.api2d.net"
+      # TRANSLATE_MAX_LEN: "8000"
+    volumes:
+      - ./backend/data:/app/backend/data
