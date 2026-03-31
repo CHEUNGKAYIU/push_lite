@@ -317,9 +317,6 @@ const App = () => {
                       <button onClick={() => { setCurrentTask(task); setShowModal(true); }} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded-lg transition-colors"><Edit3 size={16} /></button>
                       <button onClick={() => handleDelete(task.id)} className="p-2 hover:bg-rose-50 text-rose-600 rounded-lg transition-colors"><Trash2 size={16} /></button>
                     </div>
-                      {task.last_time && (
-                        <span>上次运行: {dayjs(task.last_time).format('MM-DD HH:mm')}</span>
-                      )}
                     </div>
                   </div>
                 </div>

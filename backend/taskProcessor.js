@@ -91,10 +91,10 @@ async function sendByKey({ skey, task, last, text, desp, short }) {
     const form = new FormData();
     form.append("task_id", task.id);
     form.append("task_title", task.title);
-    form.append("text", last.title);
-    form.append("title", last.title);
+    form.append("text", text);
+    form.append("title", text);
     form.append("link", last.link);
-    form.append("desp", last.content);
+    form.append("desp", desp);
 
     try {
       const response = await fetch(skey, {
@@ -109,7 +109,7 @@ async function sendByKey({ skey, task, last, text, desp, short }) {
     const cmd =
       "apprise " +
       skey.substring(12) +
-      ` -t "${text.replace(/"/g, '\\"').replace(/\$/g, "\\$")}" -b "${String(last.content || "").replace(/"/g, '\\"').replace(/\$/g, "\\$")}"`;
+      ` -t "${text.replace(/"/g, '\\"').replace(/\$/g, "\\$")}" -b "${String(desp || "").replace(/"/g, '\\"').replace(/\$/g, "\\$")}"`;
 
     ret = { code: 0, message: "sent to apprise" };
     const { exec } = require("child_process");
@@ -250,12 +250,17 @@ async function processTask(task, isTest = false) {
     const text = `${last.title || "RSS 更新"}`;
     const short = `${last.title || ""}`.substring(0, 64);
     const out = last.content || "";
-    let desp = `${last.title || ""}\n${c.turndown(out)}\n${last.link || ""}`;
+    // 构建正文，不再在开头加上 title，因为推送系统的 text 字段通常已经包含了 title
+    // 这样可以避免出现“双标题”的问题
+    let desp = `${c.turndown(out)}\n${last.link || ""}`;
 
     if (last.content && parseInt(task.translate) > 0 && process.env.OPENAI_KEY) {
+      // 翻译时建议带上标题，以获得更好的上下文
+      const toTranslate = `${last.title || ""}\n\n${c.turndown(out)}`;
       const maxLen = parseInt(process.env.TRANSLATE_MAX_LEN) > 10 ? parseInt(process.env.TRANSLATE_MAX_LEN) : 8000;
-      const ret0 = await translate(desp.substring(0, maxLen));
+      const ret0 = await translate(toTranslate.substring(0, maxLen));
       if (ret0 && ret0.result) {
+        // 翻译结果 + 分隔线 + 原始正文
         desp = `${ret0.result}\n\n\n\n---------\n\n\n\n${desp}`;
       }
     }
