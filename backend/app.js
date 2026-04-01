@@ -78,7 +78,7 @@ app.all("/check",checkApiKey,(req,res)=>{
 });
 
 app.post("/task/add",checkApiKey,async (req,res)=>{
-    const { feed, keys, minutes, keyword, bad_keyword, enabled, hide_title } = req.body;
+    const { feed, keys, minutes, keyword, bad_keyword, enabled, hide_title, remove_content } = req.body;
     if( !feed || !keys || !minutes ) return res.json({"code":400,"message":"参数错误"});
 
     let title = feed;
@@ -137,10 +137,11 @@ app.post("/task/add",checkApiKey,async (req,res)=>{
             keyword,
             bad_keyword,
             hide_title: hideTitleValue,
+            remove_content: remove_content === undefined ? (oldTask.remove_content || "") : remove_content,
             enabled: enabledValue
         };
     }
-    else tasks.push( { id, title, link, feed, keys, minutes, keyword, bad_keyword, hide_title: hideTitleValue, enabled: enabledValue } );
+    else tasks.push( { id, title, link, feed, keys, minutes, keyword, bad_keyword, hide_title: hideTitleValue, remove_content: remove_content || "", enabled: enabledValue } );
 
     // unique array by feed
     const unique = [...new Map(tasks.map(item => [item.feed, item])).values()];
@@ -156,7 +157,7 @@ app.post("/task/add",checkApiKey,async (req,res)=>{
 });
 
 app.post("/task/modify",checkApiKey,async (req,res)=>{
-    const { id, feed, keys, minutes, keyword, bad_keyword, enabled, hide_title } = req.body;
+    const { id, feed, keys, minutes, keyword, bad_keyword, enabled, hide_title, remove_content } = req.body;
     if( !id || !feed || !keys || !minutes ) return res.json({"code":400,"message":"参数错误"});
 
     // read tasks.json
@@ -181,12 +182,14 @@ app.post("/task/modify",checkApiKey,async (req,res)=>{
         const old_last_time = tasks[index].last_time||"";
         const old_last_content = tasks[index].last_content||"";
         const old_last_contents = tasks[index].last_contents||[];
+        const old_remove_content = tasks[index].remove_content||"";
         const old_hide_title = normalizeEnabled(tasks[index].hide_title, 0);
         const old_enabled = normalizeEnabled(tasks[index].enabled, 1);
         const new_enabled = normalizeEnabled(enabled, old_enabled);
         const new_hide_title = normalizeEnabled(hide_title, old_hide_title);
+        const new_remove_content = remove_content === undefined ? old_remove_content : remove_content;
         
-        tasks[index] = { id, title:old_title,link:old_link,last_time:old_last_time,last_content:old_last_content,last_contents:old_last_contents,feed,keys,minutes, keyword, bad_keyword, hide_title: new_hide_title, enabled: new_enabled};
+        tasks[index] = { id, title:old_title,link:old_link,last_time:old_last_time,last_content:old_last_content,last_contents:old_last_contents,feed,keys,minutes, keyword, bad_keyword, hide_title: new_hide_title, remove_content: new_remove_content, enabled: new_enabled};
     }
     else {
         return res.json({"code":404,"message":"任务不存在"});
@@ -284,7 +287,7 @@ app.post("/task/toggle",checkApiKey,async( req, res )=>{
 });
 
 app.post("/task/test", checkApiKey, async (req, res) => {
-    const { feed, keys, minutes, keyword, bad_keyword, hide_title } = req.body;
+    const { feed, keys, minutes, keyword, bad_keyword, hide_title, remove_content } = req.body;
     if (!feed || !keys || !minutes) return res.json({ "code": 400, "message": "参数错误" });
 
     let title = feed;
@@ -311,7 +314,7 @@ app.post("/task/test", checkApiKey, async (req, res) => {
     const id = Math.random().toString(36).substr(2, 9);
 
     // 创建任务对象
-    const task = { id, title, link, feed, keys, minutes, keyword, bad_keyword, hide_title };
+    const task = { id, title, link, feed, keys, minutes, keyword, bad_keyword, hide_title, remove_content };
 
     // 调用 processTask，测试模式下 isTest 为 true
     const result = await processTask(task, true);

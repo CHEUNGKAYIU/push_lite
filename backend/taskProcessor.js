@@ -20,6 +20,49 @@ const RSS_HEADERS = {
   Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
 };
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getRemovePatterns(task) {
+  const raw = String(task?.remove_content || "").trim();
+  if (!raw) return [];
+  return raw
+    .split("\n")
+    .flatMap((line) => String(line).split(","))
+    .map((item) => String(item).trim())
+    .filter(Boolean);
+}
+
+function applyRemovePatterns(content, patterns) {
+  let next = String(content || "");
+  if (!patterns || patterns.length === 0) return next;
+
+  for (const pattern of patterns) {
+    const p = String(pattern || "").trim();
+    if (!p) continue;
+
+    if (p.toLowerCase().startsWith("re:")) {
+      const source = p.slice(3).trim();
+      if (!source) continue;
+      try {
+        next = next.replace(new RegExp(source, "gi"), "");
+      } catch (e) {}
+      continue;
+    }
+
+    if (p.includes("<") && p.includes(">")) {
+      const source = escapeRegExp(p).replace(/\s+/g, "\\s*");
+      next = next.replace(new RegExp(source, "gi"), "");
+      continue;
+    }
+
+    next = next.split(p).join("");
+  }
+
+  return next;
+}
+
 function isTaskEnabled(task) {
   const enabled = parseInt(task?.enabled, 10);
   return Number.isNaN(enabled) ? true : enabled > 0;
@@ -283,12 +326,13 @@ async function processTask(task, isTest = false) {
 
     const c = new turndown();
     const hideTitle = parseInt(task.hide_title) > 0;
-    const text = hideTitle ? `${task.title || "RSS 更新"}` : `${last.title || "RSS 更新"}`;
-    const short = hideTitle ? `${task.title || ""}`.substring(0, 64) : `${last.title || ""}`.substring(0, 64);
-    const out = last.content || "";
+    const text = hideTitle ? "" : `${last.title || "RSS 更新"}`;
+    const short = hideTitle ? "" : `${last.title || ""}`.substring(0, 64);
+    const patterns = getRemovePatterns(task);
+    const out = applyRemovePatterns(last.content || "", patterns);
     // 构建正文，不再在开头加上 title，因为推送系统的 text 字段通常已经包含了 title
     // 这样可以避免出现“双标题”的问题
-    const markdownContent = c.turndown(out).replace(/(\n\s*){2,}/g, '\n').trim();
+    const markdownContent = applyRemovePatterns(c.turndown(out), patterns).replace(/(\n\s*){2,}/g, '\n').trim();
     let desp = `${markdownContent}\n${last.link || ""}`;
 
     const keywordCheck = passKeywordFilter(task, last.title || "");

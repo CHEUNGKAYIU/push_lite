@@ -326,6 +326,7 @@ const App = () => {
                     {task.keyword && <span className="text-[10px] px-2 py-1 bg-blue-100 text-blue-700 rounded-md font-bold">白名单</span>}
                     {task.bad_keyword && <span className="text-[10px] px-2 py-1 bg-slate-200 text-slate-600 rounded-md font-bold">黑名单</span>}
                     {task.hide_title > 0 && <span className="text-[10px] px-2 py-1 bg-rose-100 text-rose-700 rounded-md font-bold">隐藏标题</span>}
+                    {task.remove_content && <span className="text-[10px] px-2 py-1 bg-violet-100 text-violet-700 rounded-md font-bold">内容去除</span>}
                   </div>
                   <button 
                     onClick={() => handleTest(task)}
@@ -417,6 +418,11 @@ const App = () => {
                   <label className="text-sm font-bold text-slate-700">关键词黑名单 (英文逗号分隔，命中则不推送并保存到本地)</label>
                   <input name="bad_keyword" defaultValue={currentTask?.bad_keyword} placeholder="x,y,z" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none" />
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700">内容去除 (一行一个/逗号分隔，支持原始 HTML 片段或文本；正则用 re: 开头)</label>
+                <textarea name="remove_content" rows="3" defaultValue={currentTask?.remove_content} placeholder="<p><strong>@buyticketshk</strong>:</p>" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none font-mono text-xs" />
               </div>
 
               <div className="pt-4 flex gap-3">
