@@ -270,13 +270,12 @@ function buildImageRequestUrl(imageUrl = "") {
 
   // 处理 RSS/XML 常见实体编码（重点修复 &）
   const decoded = raw
-    .replace(/&/gi, "&")
+    .replace(/&amp;/gi, "&")
     .replace(/&#38;/gi, "&")
-    .replace(/"/gi, '"')
-    .replace(/'/gi, "'")
-    .replace(/</gi, "<")
-    .replace(/>/gi, ">");
-
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
   let normalized = decoded;
   try {
     const u = new URL(decoded);
