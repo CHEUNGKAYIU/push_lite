@@ -1,0 +1,70 @@
+{
+  "globalWebhookKeys": [
+    "https://open.feishu.cn/open-apis/bot/v2/hook/fb6dbebb-c8b8-4693-90d4-87b0fe06d5ac",
+    "https://open.feishu.cn/open-apis/bot/v2/hook/da0f05b7-2738-4556-8432-c2e4991667f4"
+  ],
+  "tasks": [
+    {
+      "id": "03e04932r",
+      "title": "律动BlockBeats",
+      "link": "https://www.theblockbeats.info",
+      "last_time": "2026-04-22 16:16:10",
+      "last_content": "https://m.theblockbeats.info/flash/342511",
+      "last_contents": [
+        "https://m.theblockbeats.info/flash/342511",
+        "https://m.theblockbeats.info/flash/342510",
+        "https://m.theblockbeats.info/flash/342509",
+        "https://m.theblockbeats.info/flash/342507",
+        "https://m.theblockbeats.info/flash/342506",
+        "https://m.theblockbeats.info/flash/342505",
+        "https://m.theblockbeats.info/news/62112",
+        "https://m.theblockbeats.info/flash/342503",
+        "https://m.theblockbeats.info/flash/342502",
+        "https://m.theblockbeats.info/flash/342501"
+      ],
+      "feed": "https://api.theblockbeats.news/v1/open-api/home-xml",
+      "keys": "https://open.feishu.cn/open-apis/bot/v2/hook/fb6dbebb-c8b8-4693-90d4-87b0fe06d5ac",
+      "minutes": "1",
+      "keyword": "",
+      "bad_keyword": "",
+      "hide_title": 0,
+      "remove_content": "",
+      "enabled": 1
+    },
+    {
+      "id": "twfea5nan",
+      "title": "Twitter @机灵的杰尼君🔶BNB",
+      "link": "https://x.com/Meta8Mate",
+      "feed": "http://107.172.178.137:1200/twitter/user/Meta8mate",
+      "keys": "https://open.feishu.cn/open-apis/bot/v2/hook/da0f05b7-2738-4556-8432-c2e4991667f4",
+      "minutes": "30",
+      "keyword": "",
+      "bad_keyword": "",
+      "hide_title": 0,
+      "remove_content": "",
+      "enabled": 1,
+      "last_time": "2026-04-22 16:12:11",
+      "last_content": "https://twitter.com/Meta8Mate/status/2046835101259202848",
+      "last_contents": [
+        "https://twitter.com/Meta8Mate/status/2046835101259202848",
+        "https://twitter.com/Meta8Mate/status/2046817956391428143",
+        "https://twitter.com/Meta8Mate/status/2046814076073067006",
+        "https://twitter.com/Meta8Mate/status/2046595535088542050",
+        "https://twitter.com/Meta8Mate/status/2046594167728726495",
+        "https://twitter.com/Meta8Mate/status/2046522354084577563",
+        "https://twitter.com/Meta8Mate/status/2046468268752531806",
+        "https://twitter.com/Meta8Mate/status/2046442613788831991",
+        "https://twitter.com/Meta8Mate/status/2046119983311356129",
+        "https://twitter.com/Meta8Mate/status/2046107694902489494",
+        "https://twitter.com/Meta8Mate/status/2046089739279990810",
+        "https://twitter.com/Meta8Mate/status/2045800152003440879",
+        "https://twitter.com/Meta8Mate/status/2045799031046307885",
+        "https://twitter.com/Meta8Mate/status/2045674088258318543",
+        "https://twitter.com/Meta8Mate/status/2045671306788794771",
+        "https://twitter.com/Meta8Mate/status/2045668486387757158",
+        "https://twitter.com/Meta8Mate/status/2045437142953087324",
+        "https://twitter.com/Meta8Mate/status/2045436503317508428"
+      ]
+    }
+  ]
+}

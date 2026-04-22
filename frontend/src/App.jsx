@@ -20,13 +20,16 @@ const API_BASE = window.location.origin === 'http://localhost:6001' ? 'http://lo
 const App = () => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [adminKey, setAdminKey] = useState(localStorage.getItem('admin_key') || '');
-  const [authInput, setAuthInput] = useState(localStorage.getItem('admin_key') || '');
+  const [adminKey, setAdminKey] = useState('');
+  const [authInput, setAuthInput] = useState('');
   const [authed, setAuthed] = useState(false);
   const [authChecking, setAuthChecking] = useState(false);
   const [authError, setAuthError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [currentTask, setCurrentTask] = useState(null);
+  const [pushKeys, setPushKeys] = useState([]);
+  const [globalWebhookKeys, setGlobalWebhookKeys] = useState([]);
+  const [keyInput, setKeyInput] = useState('');
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
   const [rssBase, setRssBase] = useState('https://rsshub.app');
@@ -54,6 +57,20 @@ const App = () => {
     } catch (err) {}
   };
 
+  const fetchWebhookKeys = async (currentAdminKey) => {
+    const authKey = String(currentAdminKey || adminKey || '').trim();
+    if (!authKey) return [];
+    try {
+      const res = await axios.get(`${API_BASE}/webhook/list`, { params: { key: authKey } });
+      const list = Array.isArray(res.data?.result) ? res.data.result : [];
+      setGlobalWebhookKeys(list);
+      return list;
+    } catch (err) {
+      console.error('Failed to fetch webhook keys', err);
+      return [];
+    }
+  };
+
   const verifyKey = async (key) => {
     const inputKey = String(key || '').trim();
     if (!inputKey) {
@@ -71,9 +88,9 @@ const App = () => {
 
       setAdminKey(inputKey);
       setAuthInput(inputKey);
-      localStorage.setItem('admin_key', inputKey);
       setAuthed(true);
       await fetchRssBase();
+      await fetchWebhookKeys(inputKey);
       await fetchTasks();
     } catch (err) {
       setAuthed(false);
@@ -86,21 +103,16 @@ const App = () => {
   };
 
   useEffect(() => {
-    const savedKey = localStorage.getItem('admin_key') || '';
-    if (savedKey) {
-      verifyKey(savedKey);
-    } else {
-      setLoading(false);
-      fetchRssBase();
-    }
+    setLoading(false);
+    fetchRssBase();
   }, []);
 
   const handleLogout = () => {
-    localStorage.removeItem('admin_key');
     setAdminKey('');
     setAuthInput('');
     setAuthed(false);
     setTasks([]);
+    setGlobalWebhookKeys([]);
     setShowModal(false);
     setCurrentTask(null);
     setTestResult(null);
@@ -120,7 +132,10 @@ const App = () => {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await axios.post(`${API_BASE}/task/test`, { ...task, key: adminKey });
+      const res = await axios.post(`${API_BASE}/task/test`, {
+        ...task,
+        key: adminKey,
+      });
       setTestResult(res.data.result);
     } catch (err) {
       setTestResult({ success: false, error: '测试请求失败' });
@@ -173,11 +188,76 @@ const App = () => {
     return () => clearInterval(timer);
   }, [authed, showLogs, adminKey]);
 
+  useEffect(() => {
+    if (!testResult) return;
+    const timer = setTimeout(() => {
+      setTestResult(null);
+    }, 10000);
+    return () => clearTimeout(timer);
+  }, [testResult]);
+
+  useEffect(() => {
+    if (!showModal) {
+      setPushKeys([]);
+      setKeyInput('');
+      return;
+    }
+
+    const nextKeys = String(currentTask?.keys || '')
+      .split('\n')
+      .flatMap((item) => item.split(','))
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    setPushKeys(nextKeys);
+    setKeyInput('');
+  }, [showModal, currentTask]);
+
+  const handleAddGlobalWebhookKey = async () => {
+    const nextKey = keyInput.trim();
+    if (!nextKey) return;
+    if (globalWebhookKeys.includes(nextKey)) {
+      setKeyInput('');
+      return;
+    }
+
+    try {
+      const res = await axios.post(`${API_BASE}/webhook/add`, { webhook: nextKey, key: adminKey });
+      setGlobalWebhookKeys(Array.isArray(res.data?.list) ? res.data.list : []);
+      setKeyInput('');
+    } catch (err) {
+      alert('添加全局 Webhook Key 失败: ' + (err.response?.data?.message || err.message));
+    }
+  };
+
+  const handleRemoveGlobalWebhookKey = async (targetKey) => {
+    if (!window.confirm('确定要删除这个全局 Webhook Key 吗？')) return;
+
+    try {
+      const res = await axios.post(`${API_BASE}/webhook/remove`, { webhook: targetKey, key: adminKey });
+      const nextGlobalKeys = Array.isArray(res.data?.list) ? res.data.list : [];
+      setGlobalWebhookKeys(nextGlobalKeys);
+      setPushKeys((prev) => prev.filter((item) => item !== targetKey));
+    } catch (err) {
+      alert('删除全局 Webhook Key 失败: ' + (err.response?.data?.message || err.message));
+    }
+  };
+
+  const handleTogglePushKey = (targetKey) => {
+    setPushKeys((prev) => (prev.includes(targetKey) ? prev.filter((item) => item !== targetKey) : [...prev, targetKey]));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
     const data = Object.fromEntries(formData.entries());
+    const normalizedKeys = pushKeys.map((item) => item.trim()).filter(Boolean);
+    if (normalizedKeys.length === 0) {
+      alert('请至少添加一个 Webhook Key');
+      return;
+    }
     data.key = adminKey;
+    data.keys = normalizedKeys.join('\n');
     data.hide_title = data.hide_title ? 1 : 0;
 
     const endpoint = currentTask ? '/task/modify' : '/task/add';
@@ -404,9 +484,63 @@ const App = () => {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-700">推送 Key (一行一个，支持 Server酱/Apprise/Webhook)</label>
-                <textarea required name="keys" rows="3" defaultValue={currentTask?.keys} placeholder="SCT..." className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none font-mono text-xs" />
+              <div className="space-y-3">
+                <label className="text-sm font-bold text-slate-700">全局 Webhook Key 列表</label>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={keyInput}
+                    onChange={(e) => setKeyInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddGlobalWebhookKey();
+                      }
+                    }}
+                    placeholder="https://example.com/webhook"
+                    className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddGlobalWebhookKey}
+                    className="px-4 py-3 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors"
+                  >
+                    添加到全局列表
+                  </button>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2 min-h-[84px]">
+                  {globalWebhookKeys.length === 0 ? (
+                    <p className="text-xs text-slate-400">暂无全局 Webhook Key，请先添加</p>
+                  ) : (
+                    globalWebhookKeys.map((item, index) => {
+                      const checked = pushKeys.includes(item);
+                      return (
+                        <label key={`${item}-${index}`} className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 cursor-pointer hover:border-indigo-200 transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => handleTogglePushKey(item)}
+                            className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span className="flex-1 break-all font-mono text-xs text-slate-700">{item}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleRemoveGlobalWebhookKey(item);
+                            }}
+                            className="shrink-0 rounded-lg p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                            title="从全局列表删除"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+                <p className="text-xs text-slate-500">先维护全局 Webhook Key 列表，再为当前任务勾选一个或多个推送目标。</p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

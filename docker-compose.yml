@@ -12,6 +12,8 @@ services:
     environment:
       TZ: Asia/Shanghai
       ADMIN_KEY: "admin7890"
+      APP_ID: "cli_a92178daa7b8dbcd"
+      APP_SECRET: "43e0S3kNV5XX6Z01dNtXsfhVNcPdDdbj"
       RSS_BASE: "https://rsshub.app"
       # Optional proxy
       # HTTP_PROXY: "http://127.0.0.1:7890"

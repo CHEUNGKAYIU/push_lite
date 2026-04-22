@@ -9,12 +9,34 @@ const rssParser = require("rss-parser");
 const turndown = require("turndown");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 const fetch = require("cross-fetch");
-const FormData = require("form-data");
 const fs = require("fs");
 const path = require("path");
+const FormData = require("form-data");
 
 const DATA_FILE = path.join(__dirname, "data", "tasks.json");
 const FILTERED_FILE = path.join(__dirname, "data", "filtered_messages.json");
+
+function loadTasksData() {
+  if (!fs.existsSync(DATA_FILE)) return { globalWebhookKeys: [], tasks: [] };
+
+  try {
+    const raw = fs.readFileSync(DATA_FILE, "utf8").trim();
+    if (!raw) return { globalWebhookKeys: [], tasks: [] };
+
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return { globalWebhookKeys: [], tasks: parsed };
+    }
+
+    return {
+      globalWebhookKeys: Array.isArray(parsed?.globalWebhookKeys) ? parsed.globalWebhookKeys : [],
+      tasks: Array.isArray(parsed?.tasks) ? parsed.tasks : [],
+    };
+  } catch (error) {
+    console.error("读取 tasks.json 失败，已回退为空数组", error);
+    return { globalWebhookKeys: [], tasks: [] };
+  }
+}
 const RSS_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
@@ -69,20 +91,13 @@ function isTaskEnabled(task) {
 }
 
 function loadTasks() {
-  if (!fs.existsSync(DATA_FILE)) return [];
-
-  try {
-    const raw = fs.readFileSync(DATA_FILE, "utf8").trim();
-    if (!raw) return [];
-    return JSON.parse(raw);
-  } catch (error) {
-    console.error("读取 tasks.json 失败，已回退为空数组", error);
-    return [];
-  }
+  return loadTasksData().tasks;
 }
 
 function saveTasks(tasks) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(tasks));
+  const data = loadTasksData();
+  data.tasks = Array.isArray(tasks) ? tasks : [];
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
 function saveFilteredMessage(data) {
@@ -172,72 +187,164 @@ function passKeywordFilter(task, title = "") {
   }
 }
 
-async function sendByKey({ skey, task, last, text, desp, short }) {
-  let ret = { code: -1, message: "Bad Key" };
+let feishuTenantTokenCache = {
+  token: "",
+  expireAt: 0,
+};
 
-  if (skey.toLowerCase().startsWith("sct")) {
-    ret = await sc_send(text, desp, short, String(skey).trim());
-  } else if (skey.toLowerCase().startsWith("http")) {
-    const form = new FormData();
-    form.append("task_id", task.id);
-    form.append("task_title", task.title);
-    form.append("text", text);
-    form.append("title", text);
-    form.append("link", last.link);
-    form.append("desp", desp);
-
-    try {
-      const response = await fetch(skey, {
-        method: "POST",
-        body: form,
-      });
-      ret = await response.json();
-    } catch (error) {
-      ret = { code: 9, message: "webhook " + error };
-    }
-  } else if (skey.toLowerCase().startsWith("apprise:raw ")) {
-    const cmd =
-      "apprise " +
-      skey.substring(12) +
-      ` -t "${text.replace(/"/g, '\\"').replace(/\$/g, "\\$")}" -b "${String(desp || "").replace(/"/g, '\\"').replace(/\$/g, "\\$")}"`;
-
-    ret = { code: 0, message: "sent to apprise" };
-    const { exec } = require("child_process");
-    exec(cmd, (error, stdout, stderr) => {
-      if (error) {
-        console.log(`error: ${error.message}`);
-        return;
-      }
-      if (stderr) {
-        console.log(`stderr: ${stderr}`);
-        return;
-      }
-      console.log(`stdout: ${stdout}`);
-    });
-  } else if (skey.toLowerCase().startsWith("apprise ")) {
-    const cmd =
-      skey +
-      ` -t "${text.replace(/"/g, '\\"').replace(/\$/g, "\\$")}" -b "${desp.replace(/"/g, '\\"').replace(/\$/g, "\\$")}"`;
-
-    ret = { code: 0, message: "sent to apprise" };
-    const { exec } = require("child_process");
-    exec(cmd, (error, stdout, stderr) => {
-      if (error) {
-        console.log(`error: ${error.message}`);
-        return;
-      }
-      if (stderr) {
-        console.log(`stderr: ${stderr}`);
-        return;
-      }
-      console.log(`stdout: ${stdout}`);
-    });
-  }
-
-  return ret;
+function resolveFeishuCredential(input, fallback = {}) {
+  const raw = input && typeof input === "object" ? input : {};
+  const envAppId = process.env.FEISHU_APP_ID || process.env.APP_ID || process.env.app_id || "";
+  const envAppSecret = process.env.FEISHU_APP_SECRET || process.env.APP_SECRET || process.env.app_secret || "";
+  const appId = String(raw.app_id || raw.feishu_app_id || fallback.app_id || fallback.feishu_app_id || envAppId || "").trim();
+  const appSecret = String(raw.app_secret || raw.feishu_app_secret || fallback.app_secret || fallback.feishu_app_secret || envAppSecret || "").trim();
+  return { app_id: appId, app_secret: appSecret };
 }
 
-async function processTask(task, isTest = false) {
+async function getFeishuTenantAccessToken(credentials = {}) {
+  const { app_id, app_secret } = resolveFeishuCredential(credentials);
+  if (!app_id || !app_secret) {
+    throw new Error("缺少飞书 app_id 或 app_secret");
+  }
+
+  const now = Date.now();
+  if (feishuTenantTokenCache.token && feishuTenantTokenCache.expireAt > now + 5000) {
+    return feishuTenantTokenCache.token;
+  }
+
+  const response = await fetch("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({ app_id, app_secret }),
+  });
+
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json?.code !== 0 || !json?.tenant_access_token) {
+    throw new Error(json?.msg || `获取 tenant_access_token 失败(${response.status})`);
+  }
+
+  const expireSeconds = Number(json.expire || 7200);
+  feishuTenantTokenCache = {
+    token: String(json.tenant_access_token),
+    expireAt: now + Math.max(60, expireSeconds - 60) * 1000,
+  };
+
+  return feishuTenantTokenCache.token;
+}
+
+function extractImageUrl(item = {}) {
+  const direct = [item.enclosure?.url, item.image?.url, item.thumbnail?.url]
+    .map((v) => String(v || "").trim())
+    .find(Boolean);
+  if (direct) return direct;
+
+  const html = String(item.content || item["content:encoded"] || item.summary || "");
+  const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  return match?.[1] ? String(match[1]).trim() : "";
+}
+
+async function uploadFeishuImage({ imageUrl, credentials }) {
+  if (!imageUrl) return { skipped: true, message: "无图片地址" };
+
+  const token = await getFeishuTenantAccessToken(credentials);
+  const imageResponse = await fetch(imageUrl);
+  if (!imageResponse.ok) {
+    throw new Error(`下载图片失败(${imageResponse.status})`);
+  }
+  const imageBuffer = await imageResponse.buffer();
+
+  const imagePathname = (() => {
+    try {
+      return new URL(imageUrl).pathname;
+    } catch (e) {
+      return "";
+    }
+  })();
+  const ext = path.extname(imagePathname) || ".jpg";
+  const filename = `rss_${Date.now()}${ext}`;
+
+  const form = new FormData();
+  form.append("image_type", "message");
+  form.append("image", imageBuffer, { filename, contentType: imageResponse.headers.get("content-type") || undefined });
+
+  const uploadResponse = await fetch("https://open.feishu.cn/open-apis/im/v1/images", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...form.getHeaders(),
+    },
+    body: form,
+  });
+
+  const uploadJson = await uploadResponse.json().catch(() => ({}));
+  if (!uploadResponse.ok || uploadJson?.code !== 0 || !uploadJson?.data?.image_key) {
+    throw new Error(uploadJson?.msg || `上传图片失败(${uploadResponse.status})`);
+  }
+
+  return { image_key: uploadJson.data.image_key };
+}
+
+function buildFeishuPostPayload({ task, text, desp, imageKey }) {
+  const safeTitle = String(text || task?.title || "RSS 更新").trim() || "RSS 更新";
+  const bodyText = String(desp || "").trim() || "RSS 更新";
+
+  const contentRows = [
+    [
+      {
+        tag: "text",
+        text: bodyText,
+      },
+    ],
+  ];
+
+  if (String(imageKey || "").trim()) {
+    contentRows.push([
+      {
+        tag: "img",
+        image_key: String(imageKey).trim(),
+      },
+    ]);
+  }
+
+  return {
+    msg_type: "post",
+    content: {
+      post: {
+        zh_cn: {
+          title: safeTitle,
+          content: contentRows,
+        },
+      },
+    },
+  };
+}
+
+async function sendByKey({ skey, task, text, desp, imageKey }) {
+  const payload = buildFeishuPostPayload({ task, text, desp, imageKey });
+
+  try {
+    const response = await fetch(skey, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify(payload),
+    });
+    const bodyText = await response.text();
+    try {
+      const bodyJson = JSON.parse(bodyText);
+      return { code: response.ok ? 0 : response.status, status: response.status, data: bodyJson };
+    } catch (e) {
+      return { code: response.ok ? 0 : response.status, status: response.status, data: bodyText };
+    }
+  } catch (error) {
+    return { code: 9, message: "webhook " + error.message };
+  }
+}
+
+async function processTask(task, isTest = false, options = {}) {
   try {
     if (!isTest && !isTaskEnabled(task)) {
       return { success: false, skipped: true, message: "任务已关闭" };
@@ -327,13 +434,38 @@ async function processTask(task, isTest = false) {
     const c = new turndown();
     const hideTitle = parseInt(task.hide_title) > 0;
     const text = hideTitle ? "" : `${last.title || "RSS 更新"}`;
-    const short = hideTitle ? "" : `${last.title || ""}`.substring(0, 64);
     const patterns = getRemovePatterns(task);
     const out = applyRemovePatterns(last.content || "", patterns);
     // 构建正文，不再在开头加上 title，因为推送系统的 text 字段通常已经包含了 title
     // 这样可以避免出现“双标题”的问题
     const markdownContent = applyRemovePatterns(c.turndown(out), patterns).replace(/(\n\s*){2,}/g, '\n').trim();
     let desp = `${markdownContent}\n${last.link || ""}`;
+
+    const credentials = resolveFeishuCredential(options?.credentials, task);
+    const imageUrls = [
+      ...new Set(
+        [extractImageUrl(last)]
+          .map((v) => String(v || "").trim())
+          .filter(Boolean)
+      ),
+    ];
+
+    const imageKeys = [];
+    if (imageUrls.length > 0) {
+      if (credentials.app_id && credentials.app_secret) {
+        for (const imageUrl of imageUrls) {
+          try {
+            const uploaded = await uploadFeishuImage({ imageUrl, credentials });
+            const key = String(uploaded?.image_key || "").trim();
+            if (key) imageKeys.push(key);
+          } catch (e) {
+            console.error("上传飞书图片失败", e.message || e);
+          }
+        }
+      } else {
+        console.log("检测到图片但未配置飞书 app_id/app_secret，跳过 image_key 转换");
+      }
+    }
 
     const keywordCheck = passKeywordFilter(task, last.title || "");
     if (!keywordCheck.pass) {
@@ -360,7 +492,7 @@ async function processTask(task, isTest = false) {
 
     const sendResults = [];
     for (const skey of uniqueKeys) {
-      const ret = await sendByKey({ skey, task, last, text, desp, short });
+      const ret = await sendByKey({ skey, task, last, text, desp, imageKey: imageKeys[0] || "" });
       console.log("发送结果", ret);
       sendResults.push({ skey, result: ret });
     }
@@ -407,30 +539,6 @@ async function runAllTasks() {
   return { success: true, summary };
 }
 
-async function sc_send(text, desp, short, key) {
-  const url = String(key).startsWith("sctp")
-    ? `https://${key}.push.ft07.com/send`
-    : `https://sctapi.ftqq.com/${key}.send`;
-
-  const form = new FormData();
-  form.append("text", text);
-  form.append("desp", desp);
-  form.append("short", short);
-
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      body: form,
-    });
-
-    const ret = await response.json();
-    return ret;
-  } catch (error) {
-    console.log(error);
-    return false;
-  }
-}
-
 if (require.main === module) {
   runAllTasks()
     .then((ret) => {
@@ -448,4 +556,6 @@ module.exports = {
   loadTasks,
   saveTasks,
   isTaskEnabled,
+  getFeishuTenantAccessToken,
+  uploadFeishuImage,
 };

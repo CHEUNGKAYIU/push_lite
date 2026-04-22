@@ -10,15 +10,6 @@ RUN npx vite build
 FROM node:18-slim AS runtime
 WORKDIR /app/backend
 
-# Optional channel support for keys starting with "apprise " / "apprise:raw "
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv ca-certificates \
-    && python3 -m venv /opt/apprise-venv \
-    && /opt/apprise-venv/bin/pip install --no-cache-dir apprise \
-    && ln -s /opt/apprise-venv/bin/apprise /usr/local/bin/apprise \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY backend/package*.json ./
 RUN npm ci --omit=dev
 

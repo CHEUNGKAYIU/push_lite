@@ -8,7 +8,8 @@ export default defineConfig({
     proxy: {
       '/task': 'http://localhost:6002',
       '/rss': 'http://localhost:6002',
-      '/check': 'http://localhost:6002'
+      '/check': 'http://localhost:6002',
+      '/webhook': 'http://localhost:6002'
     }
   }
 })
