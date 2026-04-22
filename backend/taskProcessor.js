@@ -268,81 +268,50 @@ function buildImageRequestUrl(imageUrl = "") {
   const raw = String(imageUrl || "").trim();
   if (!raw) return "";
 
-  // RSS 内容里常见 HTML 实体：&，必须先还原，否则 URL 参数解析异常
-  const normalizedRaw = raw.replace(/&/gi, "&");
-  if (normalizedRaw !== raw) {
-    console.log(`[image.download] 检测到 HTML 实体参数并已还原 original=${raw} normalized=${normalizedRaw}`);
+  // 仅做 HTML 实体还原：& -> &，不改格式、不补扩展名、不改 name 参数
+  const normalized = raw.replace(/&/gi, "&");
+  if (normalized !== raw) {
+    console.log(`[image.download] 检测到 HTML 实体参数并已还原 original=${raw} normalized=${normalized}`);
   }
 
-  let u;
-  try {
-    u = new URL(normalizedRaw);
-  } catch (e) {
-    return normalizedRaw;
-  }
-
-  // 兼容 twitter/pbs 图片链接（有些 name=orig 直接 404，改为 large 成功率更高）
-  if (/pbs\.twimg\.com$/i.test(u.hostname)) {
-    const format = (u.searchParams.get("format") || "").toLowerCase();
-    if (format) {
-      u.pathname = `${u.pathname}.${format}`;
-      u.searchParams.delete("format");
-    }
-
-    const name = (u.searchParams.get("name") || "").toLowerCase();
-    if (name === "orig") {
-      u.searchParams.set("name", "large");
-    }
-  }
-
-  return u.toString();
+  return normalized;
 }
 
 async function downloadImageBuffer(imageUrl) {
-  const directUrl = String(imageUrl || "").trim();
-  const htmlDecodedDirectUrl = directUrl.replace(/&/gi, "&");
-  const rewrittenUrl = buildImageRequestUrl(htmlDecodedDirectUrl);
-  const candidates = [...new Set([rewrittenUrl, htmlDecodedDirectUrl, directUrl].filter(Boolean))];
-
-  let lastError = null;
-  for (const candidate of candidates) {
-    const startAt = Date.now();
-    console.log(`[image.download] 开始下载图片 url=${candidate}`);
-
-    try {
-      const response = await fetch(candidate, {
-        method: "GET",
-        headers: {
-          "User-Agent": RSS_HEADERS["User-Agent"],
-          Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-          Referer: "https://twitter.com/",
-        },
-        redirect: "follow",
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const contentType = String(response.headers.get("content-type") || "").toLowerCase();
-      if (!contentType.startsWith("image/")) {
-        throw new Error(`返回内容不是图片 content-type=${contentType || "unknown"}`);
-      }
-
-      const buffer = await response.buffer();
-      if (!buffer || buffer.length === 0) {
-        throw new Error("图片字节为空");
-      }
-
-      console.log(`[image.download] 下载成功 url=${candidate} size=${buffer.length} contentType=${contentType} costMs=${Date.now() - startAt}`);
-      return { buffer, contentType, finalUrl: candidate };
-    } catch (e) {
-      lastError = e;
-      console.error(`[image.download] 下载失败 url=${candidate} err=${e?.message || e}`);
-    }
+  const requestUrl = buildImageRequestUrl(imageUrl);
+  if (!requestUrl) {
+    throw new Error("图片地址为空");
   }
 
-  throw new Error(`下载图片失败: ${lastError?.message || "未知错误"}`);
+  const startAt = Date.now();
+  console.log(`[image.download] 开始下载图片 url=${requestUrl}`);
+
+  const response = await fetch(requestUrl, {
+    method: "GET",
+    headers: {
+      "User-Agent": RSS_HEADERS["User-Agent"],
+      Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+      Referer: "https://twitter.com/",
+    },
+    redirect: "follow",
+  });
+
+  if (!response.ok) {
+    throw new Error(`下载图片失败: HTTP ${response.status}`);
+  }
+
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.startsWith("image/")) {
+    throw new Error(`返回内容不是图片 content-type=${contentType || "unknown"}`);
+  }
+
+  const buffer = await response.buffer();
+  if (!buffer || buffer.length === 0) {
+    throw new Error("图片字节为空");
+  }
+
+  console.log(`[image.download] 下载成功 url=${requestUrl} size=${buffer.length} contentType=${contentType} costMs=${Date.now() - startAt}`);
+  return { buffer, contentType, finalUrl: requestUrl };
 }
 
 async function uploadFeishuImage({ imageUrl, credentials }) {
