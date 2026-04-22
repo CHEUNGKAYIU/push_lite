@@ -268,8 +268,23 @@ function buildImageRequestUrl(imageUrl = "") {
   const raw = String(imageUrl || "").trim();
   if (!raw) return "";
 
-  // 仅做 HTML 实体还原：& -> &，不改格式、不补扩展名、不改 name 参数
-  const normalized = raw.replace(/&/gi, "&");
+  // 处理 RSS/XML 常见实体编码（重点修复 &）
+  const decoded = raw
+    .replace(/&/gi, "&")
+    .replace(/&#38;/gi, "&")
+    .replace(/"/gi, '"')
+    .replace(/'/gi, "'")
+    .replace(/</gi, "<")
+    .replace(/>/gi, ">");
+
+  let normalized = decoded;
+  try {
+    const u = new URL(decoded);
+    normalized = u.toString();
+  } catch (e) {
+    // 不是完整 URL 时保留解码后的原值
+  }
+
   if (normalized !== raw) {
     console.log(`[image.download] 检测到 HTML 实体参数并已还原 original=${raw} normalized=${normalized}`);
   }
