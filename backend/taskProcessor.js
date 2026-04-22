@@ -245,29 +245,114 @@ function extractImageUrl(item = {}) {
   return match?.[1] ? String(match[1]).trim() : "";
 }
 
-async function uploadFeishuImage({ imageUrl, credentials }) {
-  if (!imageUrl) return { skipped: true, message: "无图片地址" };
+function guessImageExtension(contentType = "", imageUrl = "") {
+  const ct = String(contentType || "").toLowerCase();
+  if (ct.includes("png")) return ".png";
+  if (ct.includes("webp")) return ".webp";
+  if (ct.includes("gif")) return ".gif";
+  if (ct.includes("bmp")) return ".bmp";
+  if (ct.includes("avif")) return ".avif";
+  if (ct.includes("jpeg") || ct.includes("jpg")) return ".jpg";
 
-  const token = await getFeishuTenantAccessToken(credentials);
-  const imageResponse = await fetch(imageUrl);
-  if (!imageResponse.ok) {
-    throw new Error(`下载图片失败(${imageResponse.status})`);
-  }
-  const imageBuffer = await imageResponse.buffer();
-
-  const imagePathname = (() => {
+  const pathname = (() => {
     try {
       return new URL(imageUrl).pathname;
     } catch (e) {
       return "";
     }
   })();
-  const ext = path.extname(imagePathname) || ".jpg";
+  return path.extname(pathname) || ".jpg";
+}
+
+function buildImageRequestUrl(imageUrl = "") {
+  const raw = String(imageUrl || "").trim();
+  if (!raw) return "";
+
+  let u;
+  try {
+    u = new URL(raw);
+  } catch (e) {
+    return raw;
+  }
+
+  // 兼容 twitter/pbs 图片链接（有些 name=orig 直接 404，改为 large 成功率更高）
+  if (/pbs\.twimg\.com$/i.test(u.hostname)) {
+    const format = (u.searchParams.get("format") || "").toLowerCase();
+    if (format) {
+      u.pathname = `${u.pathname}.${format}`;
+      u.searchParams.delete("format");
+    }
+
+    const name = (u.searchParams.get("name") || "").toLowerCase();
+    if (name === "orig") {
+      u.searchParams.set("name", "large");
+    }
+  }
+
+  return u.toString();
+}
+
+async function downloadImageBuffer(imageUrl) {
+  const directUrl = String(imageUrl || "").trim();
+  const rewrittenUrl = buildImageRequestUrl(directUrl);
+  const candidates = [...new Set([rewrittenUrl, directUrl].filter(Boolean))];
+
+  let lastError = null;
+  for (const candidate of candidates) {
+    const startAt = Date.now();
+    console.log(`[image.download] 开始下载图片 url=${candidate}`);
+
+    try {
+      const response = await fetch(candidate, {
+        method: "GET",
+        headers: {
+          "User-Agent": RSS_HEADERS["User-Agent"],
+          Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+          Referer: "https://twitter.com/",
+        },
+        redirect: "follow",
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+      if (!contentType.startsWith("image/")) {
+        throw new Error(`返回内容不是图片 content-type=${contentType || "unknown"}`);
+      }
+
+      const buffer = await response.buffer();
+      if (!buffer || buffer.length === 0) {
+        throw new Error("图片字节为空");
+      }
+
+      console.log(`[image.download] 下载成功 url=${candidate} size=${buffer.length} contentType=${contentType} costMs=${Date.now() - startAt}`);
+      return { buffer, contentType, finalUrl: candidate };
+    } catch (e) {
+      lastError = e;
+      console.error(`[image.download] 下载失败 url=${candidate} err=${e?.message || e}`);
+    }
+  }
+
+  throw new Error(`下载图片失败: ${lastError?.message || "未知错误"}`);
+}
+
+async function uploadFeishuImage({ imageUrl, credentials }) {
+  if (!imageUrl) return { skipped: true, message: "无图片地址" };
+
+  console.log(`[image.token] 开始获取 tenant_access_token imageUrl=${imageUrl}`);
+  const token = await getFeishuTenantAccessToken(credentials);
+  console.log(`[image.token] 获取 tenant_access_token 成功`);
+
+  const downloaded = await downloadImageBuffer(imageUrl);
+  const ext = guessImageExtension(downloaded.contentType, downloaded.finalUrl);
   const filename = `rss_${Date.now()}${ext}`;
 
+  console.log(`[image.upload] 开始上传飞书图片 filename=${filename} contentType=${downloaded.contentType} size=${downloaded.buffer.length}`);
   const form = new FormData();
   form.append("image_type", "message");
-  form.append("image", imageBuffer, { filename, contentType: imageResponse.headers.get("content-type") || undefined });
+  form.append("image", downloaded.buffer, { filename, contentType: downloaded.contentType || undefined });
 
   const uploadResponse = await fetch("https://open.feishu.cn/open-apis/im/v1/images", {
     method: "POST",
@@ -283,7 +368,13 @@ async function uploadFeishuImage({ imageUrl, credentials }) {
     throw new Error(uploadJson?.msg || `上传图片失败(${uploadResponse.status})`);
   }
 
-  return { image_key: uploadJson.data.image_key };
+  const imageKey = String(uploadJson.data.image_key || "").trim();
+  if (!imageKey) {
+    throw new Error("获取 image_key 失败：返回为空");
+  }
+
+  console.log(`[image.key] 获取 image_key 成功 image_key=${imageKey}`);
+  return { image_key: imageKey };
 }
 
 function buildFeishuPostPayload({ task, text, desp, imageKey }) {
@@ -459,7 +550,7 @@ async function processTask(task, isTest = false, options = {}) {
             const key = String(uploaded?.image_key || "").trim();
             if (key) imageKeys.push(key);
           } catch (e) {
-            console.error("上传飞书图片失败", e.message || e);
+            console.error(`[image.flow] 上传飞书图片失败 imageUrl=${imageUrl} err=${e?.message || e}`);
           }
         }
       } else {
