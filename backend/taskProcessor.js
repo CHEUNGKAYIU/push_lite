@@ -268,11 +268,17 @@ function buildImageRequestUrl(imageUrl = "") {
   const raw = String(imageUrl || "").trim();
   if (!raw) return "";
 
+  // RSS 内容里常见 HTML 实体：&，必须先还原，否则 URL 参数解析异常
+  const normalizedRaw = raw.replace(/&/gi, "&");
+  if (normalizedRaw !== raw) {
+    console.log(`[image.download] 检测到 HTML 实体参数并已还原 original=${raw} normalized=${normalizedRaw}`);
+  }
+
   let u;
   try {
-    u = new URL(raw);
+    u = new URL(normalizedRaw);
   } catch (e) {
-    return raw;
+    return normalizedRaw;
   }
 
   // 兼容 twitter/pbs 图片链接（有些 name=orig 直接 404，改为 large 成功率更高）
@@ -294,8 +300,9 @@ function buildImageRequestUrl(imageUrl = "") {
 
 async function downloadImageBuffer(imageUrl) {
   const directUrl = String(imageUrl || "").trim();
-  const rewrittenUrl = buildImageRequestUrl(directUrl);
-  const candidates = [...new Set([rewrittenUrl, directUrl].filter(Boolean))];
+  const htmlDecodedDirectUrl = directUrl.replace(/&/gi, "&");
+  const rewrittenUrl = buildImageRequestUrl(htmlDecodedDirectUrl);
+  const candidates = [...new Set([rewrittenUrl, htmlDecodedDirectUrl, directUrl].filter(Boolean))];
 
   let lastError = null;
   for (const candidate of candidates) {
