@@ -234,15 +234,17 @@ async function getFeishuTenantAccessToken(credentials = {}) {
   return feishuTenantTokenCache.token;
 }
 
-function extractImageUrl(item = {}) {
+function extractImageUrls(item = {}) {
   const direct = [item.enclosure?.url, item.image?.url, item.thumbnail?.url]
     .map((v) => String(v || "").trim())
-    .find(Boolean);
-  if (direct) return direct;
+    .filter(Boolean);
 
   const html = String(item.content || item["content:encoded"] || item.summary || "");
-  const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
-  return match?.[1] ? String(match[1]).trim() : "";
+  const htmlMatches = [...html.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)]
+    .map((match) => String(match?.[1] || "").trim())
+    .filter(Boolean);
+
+  return [...new Set([...direct, ...htmlMatches])];
 }
 
 function guessImageExtension(contentType = "", imageUrl = "") {
@@ -289,6 +291,29 @@ function buildImageRequestUrl(imageUrl = "") {
   }
 
   return normalized;
+}
+
+function removeLoadedImageLinks(content = "", loadedImageUrls = []) {
+  let next = String(content || "");
+  const urls = [...new Set((loadedImageUrls || []).map((v) => String(v || "").trim()).filter(Boolean))];
+  if (urls.length === 0) return next;
+
+  const escapeForRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  for (const rawUrl of urls) {
+    const normalizedUrl = buildImageRequestUrl(rawUrl);
+    const candidates = [...new Set([rawUrl, normalizedUrl].filter(Boolean))];
+
+    for (const candidate of candidates) {
+      const escaped = escapeForRegex(candidate);
+      // 删除 markdown 图片语法
+      next = next.replace(new RegExp(`!\\[[^\\]]*\\]\\(\\s*${escaped}(?:\\s+["'][^"']*["'])?\\s*\\)`, "gi"), "");
+      // 删除裸露的图片链接
+      next = next.replace(new RegExp(escaped, "gi"), "");
+    }
+  }
+
+  return next.replace(/(\n\s*){3,}/g, "\n\n").trim();
 }
 
 async function downloadImageBuffer(imageUrl) {
@@ -364,10 +389,14 @@ async function uploadFeishuImage({ imageUrl, credentials }) {
   }
 
   console.log(`[image.key] 获取 image_key 成功 image_key=${imageKey}`);
-  return { image_key: imageKey };
+  return {
+    image_key: imageKey,
+    image_url: String(imageUrl || "").trim(),
+    final_url: String(downloaded.finalUrl || "").trim(),
+  };
 }
 
-function buildFeishuPostPayload({ task, text, desp, imageKey }) {
+function buildFeishuPostPayload({ task, text, desp, imageKeys }) {
   const safeTitle = String(text || task?.title || "RSS 更新").trim() || "RSS 更新";
   const bodyText = String(desp || "").trim() || "RSS 更新";
 
@@ -380,11 +409,15 @@ function buildFeishuPostPayload({ task, text, desp, imageKey }) {
     ],
   ];
 
-  if (String(imageKey || "").trim()) {
+  const normalizedImageKeys = Array.isArray(imageKeys)
+    ? imageKeys.map((key) => String(key || "").trim()).filter(Boolean)
+    : [];
+
+  for (const key of normalizedImageKeys) {
     contentRows.push([
       {
         tag: "img",
-        image_key: String(imageKey).trim(),
+        image_key: key,
       },
     ]);
   }
@@ -402,8 +435,8 @@ function buildFeishuPostPayload({ task, text, desp, imageKey }) {
   };
 }
 
-async function sendByKey({ skey, task, text, desp, imageKey }) {
-  const payload = buildFeishuPostPayload({ task, text, desp, imageKey });
+async function sendByKey({ skey, task, text, desp, imageKeys }) {
+  const payload = buildFeishuPostPayload({ task, text, desp, imageKeys });
 
   try {
     const response = await fetch(skey, {
@@ -519,26 +552,24 @@ async function processTask(task, isTest = false, options = {}) {
     const out = applyRemovePatterns(last.content || "", patterns);
     // 构建正文，不再在开头加上 title，因为推送系统的 text 字段通常已经包含了 title
     // 这样可以避免出现“双标题”的问题
-    const markdownContent = applyRemovePatterns(c.turndown(out), patterns).replace(/(\n\s*){2,}/g, '\n').trim();
-    let desp = `${markdownContent}\n${last.link || ""}`;
+    let markdownContent = applyRemovePatterns(c.turndown(out), patterns).replace(/(\n\s*){2,}/g, '\n').trim();
+    let desp = [markdownContent, last.link || ""].filter(Boolean).join("\n");
 
     const credentials = resolveFeishuCredential(options?.credentials, task);
-    const imageUrls = [
-      ...new Set(
-        [extractImageUrl(last)]
-          .map((v) => String(v || "").trim())
-          .filter(Boolean)
-      ),
-    ];
+    const imageUrls = extractImageUrls(last);
 
     const imageKeys = [];
+    const loadedImageUrls = [];
     if (imageUrls.length > 0) {
       if (credentials.app_id && credentials.app_secret) {
         for (const imageUrl of imageUrls) {
           try {
             const uploaded = await uploadFeishuImage({ imageUrl, credentials });
             const key = String(uploaded?.image_key || "").trim();
-            if (key) imageKeys.push(key);
+            if (key) {
+              imageKeys.push(key);
+              loadedImageUrls.push(String(uploaded?.final_url || uploaded?.image_url || imageUrl || "").trim());
+            }
           } catch (e) {
             console.error(`[image.flow] 上传飞书图片失败 imageUrl=${imageUrl} err=${e?.message || e}`);
           }
@@ -546,6 +577,11 @@ async function processTask(task, isTest = false, options = {}) {
       } else {
         console.log("检测到图片但未配置飞书 app_id/app_secret，跳过 image_key 转换");
       }
+    }
+
+    if (loadedImageUrls.length > 0) {
+      markdownContent = removeLoadedImageLinks(markdownContent, loadedImageUrls);
+      desp = [markdownContent, last.link || ""].filter(Boolean).join("\n");
     }
 
     const keywordCheck = passKeywordFilter(task, last.title || "");
@@ -573,7 +609,7 @@ async function processTask(task, isTest = false, options = {}) {
 
     const sendResults = [];
     for (const skey of uniqueKeys) {
-      const ret = await sendByKey({ skey, task, last, text, desp, imageKey: imageKeys[0] || "" });
+      const ret = await sendByKey({ skey, task, last, text, desp, imageKeys });
       console.log("发送结果", ret);
       sendResults.push({ skey, result: ret });
     }
