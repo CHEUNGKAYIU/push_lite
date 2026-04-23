@@ -16,12 +16,14 @@ import {
 import dayjs from 'dayjs';
 
 const API_BASE = window.location.origin === 'http://localhost:6001' ? 'http://localhost:6002' : '';
+const ADMIN_KEY_STORAGE_KEY = 'rss_push_admin_key';
 
 const App = () => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [adminKey, setAdminKey] = useState('');
   const [authInput, setAuthInput] = useState('');
+  const [rememberAuth, setRememberAuth] = useState(false);
   const [authed, setAuthed] = useState(false);
   const [authChecking, setAuthChecking] = useState(false);
   const [authError, setAuthError] = useState('');
@@ -92,6 +94,17 @@ const App = () => {
       await fetchRssBase();
       await fetchWebhookKeys(inputKey);
       await fetchTasks();
+      if (rememberAuth) {
+        try {
+          localStorage.setItem(ADMIN_KEY_STORAGE_KEY, inputKey);
+        } catch (storageErr) {
+          console.error('Failed to persist admin key', storageErr);
+        }
+      } else {
+        try {
+          localStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
+        } catch (storageErr) {}
+      }
     } catch (err) {
       setAuthed(false);
       setTasks([]);
@@ -105,6 +118,18 @@ const App = () => {
   useEffect(() => {
     setLoading(false);
     fetchRssBase();
+
+    let rememberedKey = '';
+    try {
+      rememberedKey = String(localStorage.getItem(ADMIN_KEY_STORAGE_KEY) || '').trim();
+    } catch (storageErr) {
+      console.error('Failed to read persisted admin key', storageErr);
+    }
+
+    if (!rememberedKey) return;
+    setRememberAuth(true);
+    setAuthInput(rememberedKey);
+    verifyKey(rememberedKey);
   }, []);
 
   const handleLogout = () => {
@@ -116,6 +141,10 @@ const App = () => {
     setShowModal(false);
     setCurrentTask(null);
     setTestResult(null);
+    setRememberAuth(false);
+    try {
+      localStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
+    } catch (storageErr) {}
   };
 
   const handleDelete = async (id) => {
@@ -296,6 +325,16 @@ const App = () => {
               onChange={(e) => setAuthInput(e.target.value)}
               className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none"
             />
+
+            <label className="flex items-center gap-2 text-sm text-slate-600 select-none">
+              <input
+                type="checkbox"
+                checked={rememberAuth}
+                onChange={(e) => setRememberAuth(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              记住登录密码
+            </label>
 
             {authError ? (
               <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{authError}</div>
