@@ -38,13 +38,23 @@ const App = () => {
   const [showLogs, setShowLogs] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
 
-  const fetchTasks = async () => {
+  const fetchTasks = async (currentAdminKey) => {
+    const authKey = String(currentAdminKey || adminKey || '').trim();
+    if (!authKey) {
+      setTasks([]);
+      setLoading(false);
+      return [];
+    }
+
     try {
       setLoading(true);
-      const res = await axios.post(`${API_BASE}/task/list`, { key: adminKey });
-      setTasks(res.data.result || []);
+      const res = await axios.post(`${API_BASE}/task/list`, { key: authKey });
+      const list = Array.isArray(res.data?.result) ? res.data.result : [];
+      setTasks(list);
+      return list;
     } catch (err) {
       console.error('Failed to fetch tasks', err);
+      return [];
     } finally {
       setLoading(false);
     }
@@ -92,7 +102,7 @@ const App = () => {
       localStorage.setItem('admin_key', inputKey);
       await fetchRssBase();
       await fetchWebhookKeys(inputKey);
-      await fetchTasks();
+      await fetchTasks(inputKey);
     } catch (err) {
       setAuthed(false);
       setTasks([]);
