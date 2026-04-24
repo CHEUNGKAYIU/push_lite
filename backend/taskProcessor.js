@@ -239,17 +239,94 @@ async function getFeishuTenantAccessToken(credentials = {}) {
 }
 
 function extractImageUrls(item = {}) {
-  const direct = [item.enclosure?.url, item.image?.url, item.thumbnail?.url]
+  const directUrls = [item.enclosure?.url, item.image?.url, item.thumbnail?.url]
     .map((v) => String(v || "").trim())
     .filter(Boolean);
 
   const html = String(item.content || item["content:encoded"] || item.summary || "");
-  const matches = [...html.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)];
-  const htmlUrls = matches
+  const htmlImageUrls = [...html.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)]
     .map((match) => String(match?.[1] || "").trim())
     .filter(Boolean);
 
-  return [...new Set([...direct, ...htmlUrls])];
+  return [...new Set([...directUrls, ...htmlImageUrls])];
+}
+
+function buildFeishuContentRows({ markdownContent = "", fallbackLink = "", imageKeyMap = new Map() }) {
+  const rows = [];
+  const pushTextRows = (value = "") => {
+    const normalized = String(value || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n");
+    const lines = normalized.split("\n");
+
+    for (const line of lines) {
+      const text = String(line || "").trim();
+      if (!text) continue;
+      rows.push([
+        {
+          tag: "text",
+          text,
+        },
+      ]);
+    }
+  };
+
+  const content = String(markdownContent || "").trim();
+  const imageSyntaxRegex = /!\[[^\]]*\]\(([^)]+)\)/g;
+  let lastIndex = 0;
+  let matched = false;
+  let match;
+
+  while ((match = imageSyntaxRegex.exec(content)) !== null) {
+    matched = true;
+    const rawSegment = String(match[0] || "");
+    const rawImageUrl = String(match[1] || "").trim();
+    const normalizedImageUrl = buildImageRequestUrl(rawImageUrl);
+    const imageKey = String(imageKeyMap.get(normalizedImageUrl) || imageKeyMap.get(rawImageUrl) || "").trim();
+    const textBefore = content.slice(lastIndex, match.index);
+
+    pushTextRows(textBefore);
+
+    if (imageKey) {
+      rows.push([
+        {
+          tag: "img",
+          image_key: imageKey,
+        },
+      ]);
+    } else {
+      pushTextRows(rawSegment);
+    }
+
+    lastIndex = match.index + rawSegment.length;
+  }
+
+  if (matched) {
+    pushTextRows(content.slice(lastIndex));
+  } else {
+    pushTextRows(content);
+  }
+
+  const safeFallbackLink = String(fallbackLink || "").trim();
+  if (safeFallbackLink) {
+    rows.push([
+      {
+        tag: "text",
+        text: safeFallbackLink,
+      },
+    ]);
+  }
+
+  if (rows.length === 0) {
+    rows.push([
+      {
+        tag: "text",
+        text: safeFallbackLink || "RSS 更新",
+      },
+    ]);
+  }
+
+  return rows;
 }
 
 function guessImageExtension(contentType = "", imageUrl = "") {
@@ -398,61 +475,18 @@ async function uploadFeishuImage({ imageUrl, credentials }) {
   return { image_key: imageKey };
 }
 
-function escapeRegExpForUrl(value = "") {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function removeImageUrlsFromText(content = "", imageUrls = []) {
-  let next = String(content || "");
-  const urls = Array.isArray(imageUrls)
-    ? [...new Set(imageUrls.map((v) => String(v || "").trim()).filter(Boolean))]
-    : [];
-
-  for (const url of urls) {
-    const escaped = escapeRegExpForUrl(url)
-      .replace(/&/g, "(?:&|&|&#38;)")
-      .replace(/\//g, "\\/");
-    next = next.replace(new RegExp(escaped, "gi"), "");
-  }
-
-  return next.replace(/(\n\s*){2,}/g, "\n").trim();
-}
-
-function buildFeishuPostPayload({ task, text, desp, imageKeys = [] }) {
+function buildFeishuPostPayload({ task, text, desp, contentRows }) {
   const safeTitle = String(text || task?.title || "RSS 更新").trim() || "RSS 更新";
-  const bodyText = String(desp || "").trim() || "RSS 更新";
-
-  const contentRows = [];
-  const normalizedImageKeys = Array.isArray(imageKeys)
-    ? imageKeys.map((k) => String(k || "").trim()).filter(Boolean)
-    : [];
-
-  if (bodyText) {
-    contentRows.push([
-      {
-        tag: "text",
-        text: bodyText,
-      },
-    ]);
-  }
-
-  for (const imageKey of normalizedImageKeys) {
-    contentRows.push([
-      {
-        tag: "img",
-        image_key: imageKey,
-      },
-    ]);
-  }
-
-  if (contentRows.length === 0) {
-    contentRows.push([
-      {
-        tag: "text",
-        text: "RSS 更新",
-      },
-    ]);
-  }
+  const normalizedRows = Array.isArray(contentRows) && contentRows.length > 0
+    ? contentRows
+    : [
+      [
+        {
+          tag: "text",
+          text: String(desp || "").trim() || "RSS 更新",
+        },
+      ],
+    ];
 
   return {
     msg_type: "post",
@@ -460,15 +494,15 @@ function buildFeishuPostPayload({ task, text, desp, imageKeys = [] }) {
       post: {
         zh_cn: {
           title: safeTitle,
-          content: contentRows,
+          content: normalizedRows,
         },
       },
     },
   };
 }
 
-async function sendByKey({ skey, task, text, desp, imageKeys = [] }) {
-  const payload = buildFeishuPostPayload({ task, text, desp, imageKeys });
+async function sendByKey({ skey, task, text, desp, contentRows }) {
+  const payload = buildFeishuPostPayload({ task, text, desp, contentRows });
 
   try {
     const response = await fetch(skey, {
@@ -589,15 +623,18 @@ async function processTask(task, isTest = false, options = {}) {
 
     const credentials = resolveFeishuCredential(options?.credentials, task);
     const imageUrls = extractImageUrls(last);
-
-    const imageKeys = [];
+    const imageKeyMap = new Map();
     if (imageUrls.length > 0) {
       if (credentials.app_id && credentials.app_secret) {
         for (const imageUrl of imageUrls) {
           try {
             const uploaded = await uploadFeishuImage({ imageUrl, credentials });
             const key = String(uploaded?.image_key || "").trim();
-            if (key) imageKeys.push(key);
+            const normalizedImageUrl = buildImageRequestUrl(imageUrl);
+            if (key) {
+              imageKeyMap.set(String(imageUrl || "").trim(), key);
+              imageKeyMap.set(normalizedImageUrl, key);
+            }
           } catch (e) {
             console.error(`[image.flow] 上传飞书图片失败 imageUrl=${imageUrl} err=${e?.message || e}`);
           }
@@ -607,9 +644,11 @@ async function processTask(task, isTest = false, options = {}) {
       }
     }
 
-    if (imageKeys.length > 0) {
-      desp = removeImageUrlsFromText(desp, imageUrls);
-    }
+    const contentRows = buildFeishuContentRows({
+      markdownContent,
+      fallbackLink: last.link || "",
+      imageKeyMap,
+    });
 
     const keywordCheck = passKeywordFilter(task, last.title || "");
     if (!keywordCheck.pass) {
@@ -636,7 +675,7 @@ async function processTask(task, isTest = false, options = {}) {
 
     const sendResults = [];
     for (const skey of uniqueKeys) {
-      const ret = await sendByKey({ skey, task, last, text, desp, imageKeys });
+      const ret = await sendByKey({ skey, task, last, text, desp, contentRows });
       console.log("发送结果", ret);
       sendResults.push({ skey, result: ret });
     }
