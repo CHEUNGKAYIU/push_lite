@@ -136,7 +136,7 @@ function shouldRunTask(task, isTest = false) {
   return dayjs(task.last_time).add(task.minutes, "minutes").isBefore(dayjs().tz());
 }
 
-function createParser() {
+function buildRequestOptions() {
   let requestOptions = {};
   const httpProxy = process.env.HTTP_PROXY || process.env.http_proxy;
   const httpsProxy = process.env.HTTPS_PROXY || process.env.https_proxy;
@@ -147,9 +147,13 @@ function createParser() {
     requestOptions.agent = new HttpsProxyAgent(httpsProxy);
   }
 
+  return requestOptions;
+}
+
+function createParser() {
   return new rssParser({
     timeout: 10000,
-    requestOptions,
+    requestOptions: buildRequestOptions(),
     headers: RSS_HEADERS,
   });
 }
@@ -234,15 +238,18 @@ async function getFeishuTenantAccessToken(credentials = {}) {
   return feishuTenantTokenCache.token;
 }
 
-function extractImageUrl(item = {}) {
+function extractImageUrls(item = {}) {
   const direct = [item.enclosure?.url, item.image?.url, item.thumbnail?.url]
     .map((v) => String(v || "").trim())
-    .find(Boolean);
-  if (direct) return direct;
+    .filter(Boolean);
 
   const html = String(item.content || item["content:encoded"] || item.summary || "");
-  const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
-  return match?.[1] ? String(match[1]).trim() : "";
+  const matches = [...html.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)];
+  const htmlUrls = matches
+    .map((match) => String(match?.[1] || "").trim())
+    .filter(Boolean);
+
+  return [...new Set([...direct, ...htmlUrls])];
 }
 
 function guessImageExtension(contentType = "", imageUrl = "") {
@@ -298,34 +305,58 @@ async function downloadImageBuffer(imageUrl) {
   }
 
   const startAt = Date.now();
-  console.log(`[image.download] 开始下载图片 url=${requestUrl}`);
+  const requestOptions = buildRequestOptions();
+  const timeoutMs = Number(process.env.IMAGE_FETCH_TIMEOUT || 20000);
+  const maxRetries = Math.max(1, Number(process.env.IMAGE_FETCH_RETRIES || 2));
+  console.log(`[image.download] 开始下载图片 url=${requestUrl} timeoutMs=${timeoutMs} retries=${maxRetries} proxy=${requestOptions.agent ? "on" : "off"}`);
 
-  const response = await fetch(requestUrl, {
-    method: "GET",
-    headers: {
-      "User-Agent": RSS_HEADERS["User-Agent"],
-      Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-      Referer: "https://twitter.com/",
-    },
-    redirect: "follow",
-  });
+  let lastError = null;
 
-  if (!response.ok) {
-    throw new Error(`下载图片失败: HTTP ${response.status}`);
+  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(requestUrl, {
+        ...requestOptions,
+        method: "GET",
+        headers: {
+          "User-Agent": RSS_HEADERS["User-Agent"],
+          Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+          Referer: "https://twitter.com/",
+        },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`下载图片失败: HTTP ${response.status}`);
+      }
+
+      const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+      if (!contentType.startsWith("image/")) {
+        throw new Error(`返回内容不是图片 content-type=${contentType || "unknown"}`);
+      }
+
+      const buffer = await response.buffer();
+      if (!buffer || buffer.length === 0) {
+        throw new Error("图片字节为空");
+      }
+
+      clearTimeout(timer);
+      console.log(`[image.download] 下载成功 url=${requestUrl} size=${buffer.length} contentType=${contentType} attempt=${attempt} costMs=${Date.now() - startAt}`);
+      return { buffer, contentType, finalUrl: requestUrl };
+    } catch (error) {
+      clearTimeout(timer);
+      lastError = error;
+      const isAbort = error?.name === "AbortError";
+      const reason = isAbort ? `请求超时(${timeoutMs}ms)` : (error?.message || String(error));
+      console.error(`[image.download] 下载失败 attempt=${attempt}/${maxRetries} url=${requestUrl} reason=${reason}`);
+      if (attempt >= maxRetries) break;
+    }
   }
 
-  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
-  if (!contentType.startsWith("image/")) {
-    throw new Error(`返回内容不是图片 content-type=${contentType || "unknown"}`);
-  }
-
-  const buffer = await response.buffer();
-  if (!buffer || buffer.length === 0) {
-    throw new Error("图片字节为空");
-  }
-
-  console.log(`[image.download] 下载成功 url=${requestUrl} size=${buffer.length} contentType=${contentType} costMs=${Date.now() - startAt}`);
-  return { buffer, contentType, finalUrl: requestUrl };
+  throw new Error(`图片下载失败: ${lastError?.name === "AbortError" ? `请求超时(${timeoutMs}ms)` : (lastError?.message || String(lastError) || "unknown")}`);
 }
 
 async function uploadFeishuImage({ imageUrl, credentials }) {
@@ -367,24 +398,58 @@ async function uploadFeishuImage({ imageUrl, credentials }) {
   return { image_key: imageKey };
 }
 
-function buildFeishuPostPayload({ task, text, desp, imageKey }) {
+function escapeRegExpForUrl(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function removeImageUrlsFromText(content = "", imageUrls = []) {
+  let next = String(content || "");
+  const urls = Array.isArray(imageUrls)
+    ? [...new Set(imageUrls.map((v) => String(v || "").trim()).filter(Boolean))]
+    : [];
+
+  for (const url of urls) {
+    const escaped = escapeRegExpForUrl(url)
+      .replace(/&/g, "(?:&|&|&#38;)")
+      .replace(/\//g, "\\/");
+    next = next.replace(new RegExp(escaped, "gi"), "");
+  }
+
+  return next.replace(/(\n\s*){2,}/g, "\n").trim();
+}
+
+function buildFeishuPostPayload({ task, text, desp, imageKeys = [] }) {
   const safeTitle = String(text || task?.title || "RSS 更新").trim() || "RSS 更新";
   const bodyText = String(desp || "").trim() || "RSS 更新";
 
-  const contentRows = [
-    [
+  const contentRows = [];
+  const normalizedImageKeys = Array.isArray(imageKeys)
+    ? imageKeys.map((k) => String(k || "").trim()).filter(Boolean)
+    : [];
+
+  if (bodyText) {
+    contentRows.push([
       {
         tag: "text",
         text: bodyText,
       },
-    ],
-  ];
+    ]);
+  }
 
-  if (String(imageKey || "").trim()) {
+  for (const imageKey of normalizedImageKeys) {
     contentRows.push([
       {
         tag: "img",
-        image_key: String(imageKey).trim(),
+        image_key: imageKey,
+      },
+    ]);
+  }
+
+  if (contentRows.length === 0) {
+    contentRows.push([
+      {
+        tag: "text",
+        text: "RSS 更新",
       },
     ]);
   }
@@ -402,8 +467,8 @@ function buildFeishuPostPayload({ task, text, desp, imageKey }) {
   };
 }
 
-async function sendByKey({ skey, task, text, desp, imageKey }) {
-  const payload = buildFeishuPostPayload({ task, text, desp, imageKey });
+async function sendByKey({ skey, task, text, desp, imageKeys = [] }) {
+  const payload = buildFeishuPostPayload({ task, text, desp, imageKeys });
 
   try {
     const response = await fetch(skey, {
@@ -523,13 +588,7 @@ async function processTask(task, isTest = false, options = {}) {
     let desp = `${markdownContent}\n${last.link || ""}`;
 
     const credentials = resolveFeishuCredential(options?.credentials, task);
-    const imageUrls = [
-      ...new Set(
-        [extractImageUrl(last)]
-          .map((v) => String(v || "").trim())
-          .filter(Boolean)
-      ),
-    ];
+    const imageUrls = extractImageUrls(last);
 
     const imageKeys = [];
     if (imageUrls.length > 0) {
@@ -546,6 +605,10 @@ async function processTask(task, isTest = false, options = {}) {
       } else {
         console.log("检测到图片但未配置飞书 app_id/app_secret，跳过 image_key 转换");
       }
+    }
+
+    if (imageKeys.length > 0) {
+      desp = removeImageUrlsFromText(desp, imageUrls);
     }
 
     const keywordCheck = passKeywordFilter(task, last.title || "");
@@ -573,7 +636,7 @@ async function processTask(task, isTest = false, options = {}) {
 
     const sendResults = [];
     for (const skey of uniqueKeys) {
-      const ret = await sendByKey({ skey, task, last, text, desp, imageKey: imageKeys[0] || "" });
+      const ret = await sendByKey({ skey, task, last, text, desp, imageKeys });
       console.log("发送结果", ret);
       sendResults.push({ skey, result: ret });
     }

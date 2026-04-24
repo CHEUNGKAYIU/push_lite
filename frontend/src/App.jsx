@@ -21,7 +21,7 @@ const App = () => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [adminKey, setAdminKey] = useState('');
-  const [authInput, setAuthInput] = useState('');
+  const [authInput, setAuthInput] = useState(() => localStorage.getItem('admin_key') || '');
   const [authed, setAuthed] = useState(false);
   const [authChecking, setAuthChecking] = useState(false);
   const [authError, setAuthError] = useState('');
@@ -89,6 +89,7 @@ const App = () => {
       setAdminKey(inputKey);
       setAuthInput(inputKey);
       setAuthed(true);
+      localStorage.setItem('admin_key', inputKey);
       await fetchRssBase();
       await fetchWebhookKeys(inputKey);
       await fetchTasks();
@@ -105,11 +106,17 @@ const App = () => {
   useEffect(() => {
     setLoading(false);
     fetchRssBase();
+
+    const savedKey = String(localStorage.getItem('admin_key') || '').trim();
+    if (savedKey) {
+      verifyKey(savedKey);
+    }
   }, []);
 
   const handleLogout = () => {
     setAdminKey('');
     setAuthInput('');
+    localStorage.removeItem('admin_key');
     setAuthed(false);
     setTasks([]);
     setGlobalWebhookKeys([]);
