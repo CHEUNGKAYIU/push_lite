@@ -115,19 +115,74 @@ function loadTasksData() {
 
 function saveTasksData(data) {
     const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
-    const globalWebhookKeys = [...new Set((Array.isArray(data?.globalWebhookKeys) ? data.globalWebhookKeys : []).map((item) => String(item || '').trim()).filter(Boolean))];
-    writeJson(getTasksFile(), { globalWebhookKeys, tasks });
+    const rawHooks = Array.isArray(data?.globalWebhookKeys) ? data.globalWebhookKeys : [];
+    const globalWebhookKeys = rawHooks.map((item) => {
+        if (typeof item === 'string') {
+            return { url: String(item || '').trim(), remark: '' };
+        }
+        return {
+            url: String(item?.url || '').trim(),
+            remark: String(item?.remark || '').trim(),
+        };
+    }).filter((item) => item.url);
+    // deduplicate by url
+    const seen = new Set();
+    const unique = [];
+    for (const item of globalWebhookKeys) {
+        if (!seen.has(item.url)) {
+            seen.add(item.url);
+            unique.push(item);
+        }
+    }
+    writeJson(getTasksFile(), { globalWebhookKeys: unique, tasks });
+}
+
+function loadWebhookItems() {
+    const { globalWebhookKeys } = loadTasksData();
+    return globalWebhookKeys.map((item) => {
+        if (typeof item === 'string') {
+            return { url: String(item || '').trim(), remark: '' };
+        }
+        return {
+            url: String(item?.url || '').trim(),
+            remark: String(item?.remark || '').trim(),
+        };
+    }).filter((item) => item.url);
 }
 
 function loadWebhookKeys() {
-    const { globalWebhookKeys } = loadTasksData();
-    return [...new Set(globalWebhookKeys.map((item) => String(item || '').trim()).filter(Boolean))];
+    return [...new Set(loadWebhookItems().map((item) => item.url))];
+}
+
+function saveWebhookItems(items) {
+    const data = loadTasksData();
+    const normalized = (Array.isArray(items) ? items : []).map((item) => {
+        if (typeof item === 'string') {
+            return { url: String(item || '').trim(), remark: '' };
+        }
+        return {
+            url: String(item?.url || '').trim(),
+            remark: String(item?.remark || '').trim(),
+        };
+    }).filter((item) => item.url);
+    const seen = new Set();
+    const unique = [];
+    for (const item of normalized) {
+        if (!seen.has(item.url)) {
+            seen.add(item.url);
+            unique.push(item);
+        }
+    }
+    data.globalWebhookKeys = unique;
+    saveTasksData(data);
 }
 
 function saveWebhookKeys(keys) {
-    const data = loadTasksData();
-    data.globalWebhookKeys = [...new Set((Array.isArray(keys) ? keys : []).map((item) => String(item || '').trim()).filter(Boolean))];
-    saveTasksData(data);
+    const items = (Array.isArray(keys) ? keys : []).map((item) => {
+        if (typeof item === 'string') return { url: String(item || '').trim(), remark: '' };
+        return { url: String(item?.url || '').trim(), remark: String(item?.remark || '').trim() };
+    });
+    saveWebhookItems(items);
 }
 
 function loadTasks() {
@@ -181,40 +236,61 @@ app.all("/check",checkApiKey,(req,res)=>{
 });
 
 app.get('/webhook/list', checkApiKey, (req, res) => {
-    res.json({ result: loadWebhookKeys() });
+    res.json({ result: loadWebhookItems() });
 });
 
 app.post('/webhook/add', checkApiKey, (req, res) => {
     const webhook = normalizeWebhookValue(req.body?.webhook);
     if (!webhook) return res.json({ code: 400, message: '参数错误' });
 
-    const nextKeys = [...new Set([...loadWebhookKeys().map(normalizeWebhookValue), webhook])];
-    saveWebhookKeys(nextKeys);
-    res.json({ result: 'ok', list: nextKeys });
+    const remark = String(req.body?.remark || '').trim();
+    const items = loadWebhookItems();
+    const existingIndex = items.findIndex((item) => item.url === webhook);
+    if (existingIndex >= 0) {
+        if (remark) items[existingIndex].remark = remark;
+    } else {
+        items.push({ url: webhook, remark });
+    }
+    saveWebhookItems(items);
+    res.json({ result: 'ok', list: loadWebhookItems() });
 });
 
 app.post('/webhook/remove', checkApiKey, (req, res) => {
     const webhook = normalizeWebhookValue(req.body?.webhook);
     if (!webhook) return res.json({ code: 400, message: '参数错误' });
 
-    const nextKeys = loadWebhookKeys().map(normalizeWebhookValue).filter((item) => item !== webhook);
-    saveWebhookKeys(nextKeys);
-    res.json({ result: 'ok', list: nextKeys });
+    const nextItems = loadWebhookItems().filter((item) => item.url !== webhook);
+    saveWebhookItems(nextItems);
+    res.json({ result: 'ok', list: loadWebhookItems() });
+});
+
+app.post('/webhook/remark', checkApiKey, (req, res) => {
+    const webhook = normalizeWebhookValue(req.body?.webhook);
+    if (!webhook) return res.json({ code: 400, message: '参数错误' });
+
+    const remark = String(req.body?.remark || '').trim();
+    const items = loadWebhookItems();
+    const target = items.find((item) => item.url === webhook);
+    if (!target) return res.json({ code: 404, message: 'Webhook 不存在' });
+    target.remark = remark;
+    saveWebhookItems(items);
+    res.json({ result: 'ok', list: loadWebhookItems() });
 });
 
 app.post("/task/add",checkApiKey,async (req,res)=>{
-    const { feed, keys, minutes, keyword, bad_keyword, enabled, hide_title, remove_content } = req.body;
+    const { feed, keys, minutes, keyword, bad_keyword, enabled, hide_title, remove_content, title: customTitle, bad_keyword_save } = req.body;
     if( !feed || !keys || !minutes ) return res.json({"code":400,"message":"参数错误"});
 
     const keysCheck = ensureTaskWebhookKeys(keys);
     if (!keysCheck.ok) return res.json({"code":400,"message":keysCheck.message});
 
-    let title = feed;
+    let title = (customTitle !== undefined && String(customTitle).trim()) ? String(customTitle).trim() : feed;
     let link = "";
     let enabledValue = normalizeEnabled(enabled, 1);
     let hideTitleValue = normalizeEnabled(hide_title, 0);
+    let badKeywordSaveValue = bad_keyword_save !== undefined ? normalizeEnabled(bad_keyword_save, 1) : 1;
     let checkFailed = false;
-    // 验证 feed ，并获取标题
+    // 验证 feed ，并获取标题（仅在未手动设置标题时才从RSS获取）
     try {
         const parser = new rssParser({
             timeout: 10000,
@@ -224,7 +300,7 @@ app.post("/task/add",checkApiKey,async (req,res)=>{
             }
         });
         const site = await parser.parseURL( feed );
-        if( site.title ) title = site.title;
+        if (!customTitle && site.title) title = site.title;
         if( site.link ) link = site.link;
         
         
@@ -254,12 +330,13 @@ app.post("/task/add",checkApiKey,async (req,res)=>{
             minutes,
             keyword,
             bad_keyword,
+            bad_keyword_save: badKeywordSaveValue,
             hide_title: hideTitleValue,
             remove_content: remove_content === undefined ? (oldTask.remove_content || "") : remove_content,
             enabled: enabledValue
         };
     }
-    else tasks.push( { id, title, link, feed, keys: keysCheck.keys, minutes, keyword, bad_keyword, hide_title: hideTitleValue, remove_content: remove_content || "", enabled: enabledValue } );
+    else tasks.push( { id, title, link, feed, keys: keysCheck.keys, minutes, keyword, bad_keyword, bad_keyword_save: badKeywordSaveValue, hide_title: hideTitleValue, remove_content: remove_content || "", enabled: enabledValue } );
 
     // unique array by feed
     const unique = [...new Map(tasks.map(item => [item.feed, item])).values()];
@@ -275,7 +352,7 @@ app.post("/task/add",checkApiKey,async (req,res)=>{
 });
 
 app.post("/task/modify",checkApiKey,async (req,res)=>{
-    const { id, feed, keys, minutes, keyword, bad_keyword, enabled, hide_title, remove_content } = req.body;
+    const { id, feed, keys, minutes, keyword, bad_keyword, enabled, hide_title, remove_content, title: customTitle, bad_keyword_save } = req.body;
     if( !id || !feed || !keys || !minutes ) return res.json({"code":400,"message":"参数错误"});
 
     const keysCheck = ensureTaskWebhookKeys(keys);
@@ -299,8 +376,10 @@ app.post("/task/modify",checkApiKey,async (req,res)=>{
         const new_enabled = normalizeEnabled(enabled, old_enabled);
         const new_hide_title = normalizeEnabled(hide_title, old_hide_title);
         const new_remove_content = remove_content === undefined ? old_remove_content : remove_content;
+        const new_title = (customTitle !== undefined && String(customTitle).trim()) ? String(customTitle).trim() : old_title;
+        const new_bad_keyword_save = bad_keyword_save !== undefined ? normalizeEnabled(bad_keyword_save, 1) : (tasks[index].bad_keyword_save !== undefined ? tasks[index].bad_keyword_save : 1);
         
-        tasks[index] = { id, title:old_title,link:old_link,last_time:old_last_time,last_content:old_last_content,last_contents:old_last_contents,feed,keys: keysCheck.keys,minutes, keyword, bad_keyword, hide_title: new_hide_title, remove_content: new_remove_content, enabled: new_enabled};
+        tasks[index] = { id, title:new_title,link:old_link,last_time:old_last_time,last_content:old_last_content,last_contents:old_last_contents,feed,keys: keysCheck.keys,minutes, keyword, bad_keyword, bad_keyword_save: new_bad_keyword_save, hide_title: new_hide_title, remove_content: new_remove_content, enabled: new_enabled};
     }
     else {
         return res.json({"code":404,"message":"任务不存在"});
@@ -358,16 +437,16 @@ app.post("/task/toggle",checkApiKey,async( req, res )=>{
 });
 
 app.post("/task/test", checkApiKey, async (req, res) => {
-    const { feed, keys, minutes, keyword, bad_keyword, hide_title, remove_content, app_id, app_secret } = req.body;
+    const { feed, keys, minutes, keyword, bad_keyword, hide_title, remove_content, app_id, app_secret, title: customTitle, bad_keyword_save } = req.body;
     if (!feed || !keys || !minutes) return res.json({ "code": 400, "message": "参数错误" });
 
     const keysCheck = ensureTaskWebhookKeys(keys);
     if (!keysCheck.ok) return res.json({ "code": 400, "message": keysCheck.message });
 
-    let title = feed;
+    let title = (customTitle !== undefined && String(customTitle).trim()) ? String(customTitle).trim() : feed;
     let link = "";
 
-    // 验证 feed，并获取标题
+    // 验证 feed，并获取标题（仅在未手动设置标题时才从RSS获取）
     try {
         const parser = new rssParser({
             timeout: 10000,
@@ -377,7 +456,7 @@ app.post("/task/test", checkApiKey, async (req, res) => {
             }
         });
         const site = await parser.parseURL(feed);
-        if (site.title) title = site.title;
+        if (!customTitle && site.title) title = site.title;
         if (site.link) link = site.link;
     } catch (error) {
         console.log(error);
@@ -387,8 +466,10 @@ app.post("/task/test", checkApiKey, async (req, res) => {
     // 生成唯一 ID
     const id = Math.random().toString(36).substr(2, 9);
 
+    const badKeywordSaveValue = bad_keyword_save !== undefined ? normalizeEnabled(bad_keyword_save, 1) : 1;
+
     // 创建任务对象
-    const task = { id, title, link, feed, keys: keysCheck.keys, minutes, keyword, bad_keyword, hide_title, remove_content };
+    const task = { id, title, link, feed, keys: keysCheck.keys, minutes, keyword, bad_keyword, bad_keyword_save: badKeywordSaveValue, hide_title, remove_content };
 
     // 调用 processTask，测试模式下 isTest 为 true
     const result = await processTask(task, true, {

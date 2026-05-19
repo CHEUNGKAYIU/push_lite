@@ -17,6 +17,63 @@ import dayjs from 'dayjs';
 
 const API_BASE = window.location.origin === 'http://localhost:6001' ? 'http://localhost:6002' : '';
 
+const EditableRemark = ({ currentRemark, onSave }) => {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(currentRemark || '');
+
+  useEffect(() => {
+    setValue(currentRemark || '');
+  }, [currentRemark]);
+
+  const handleSave = () => {
+    const trimmed = value.trim();
+    if (trimmed !== (currentRemark || '')) {
+      onSave(trimmed);
+    }
+    setEditing(false);
+  };
+
+  const handleCancel = () => {
+    setValue(currentRemark || '');
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') handleSave();
+            if (e.key === 'Escape') handleCancel();
+          }}
+          className="w-24 px-2 py-1 text-xs border border-slate-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none"
+          autoFocus
+        />
+        <button type="button" onClick={handleSave} className="text-emerald-600 hover:text-emerald-700">
+          <CheckCircle2 size={14} />
+        </button>
+        <button type="button" onClick={handleCancel} className="text-rose-500 hover:text-rose-600">
+          <X size={14} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className="shrink-0 rounded-lg px-2 py-1 text-xs text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+      title="编辑备注"
+    >
+      {currentRemark || '添加备注'}
+    </button>
+  );
+};
+
 const App = () => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -29,7 +86,9 @@ const App = () => {
   const [currentTask, setCurrentTask] = useState(null);
   const [pushKeys, setPushKeys] = useState([]);
   const [globalWebhookKeys, setGlobalWebhookKeys] = useState([]);
+  const [globalWebhookItems, setGlobalWebhookItems] = useState([]);
   const [keyInput, setKeyInput] = useState('');
+  const [webhookRemarkInput, setWebhookRemarkInput] = useState('');
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
   const [rssBase, setRssBase] = useState('https://rsshub.app');
@@ -37,6 +96,7 @@ const App = () => {
   const [logs, setLogs] = useState([]);
   const [showLogs, setShowLogs] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
+  const [showWebhookConfig, setShowWebhookConfig] = useState(false);
 
   const fetchTasks = async (currentAdminKey) => {
     const authKey = String(currentAdminKey || adminKey || '').trim();
@@ -73,8 +133,14 @@ const App = () => {
     try {
       const res = await axios.get(`${API_BASE}/webhook/list`, { params: { key: authKey } });
       const list = Array.isArray(res.data?.result) ? res.data.result : [];
-      setGlobalWebhookKeys(list);
-      return list;
+      // Support both old string array and new object array format
+      const items = list.map((item) => {
+        if (typeof item === 'string') return { url: item, remark: '' };
+        return { url: String(item?.url || '').trim(), remark: String(item?.remark || '').trim() };
+      }).filter((item) => item.url);
+      setGlobalWebhookItems(items);
+      setGlobalWebhookKeys(items.map((item) => item.url));
+      return items;
     } catch (err) {
       console.error('Failed to fetch webhook keys', err);
       return [];
@@ -130,6 +196,7 @@ const App = () => {
     setAuthed(false);
     setTasks([]);
     setGlobalWebhookKeys([]);
+    setGlobalWebhookItems([]);
     setShowModal(false);
     setCurrentTask(null);
     setTestResult(null);
@@ -233,17 +300,36 @@ const App = () => {
   const handleAddGlobalWebhookKey = async () => {
     const nextKey = keyInput.trim();
     if (!nextKey) return;
-    if (globalWebhookKeys.includes(nextKey)) {
-      setKeyInput('');
-      return;
-    }
+    const remark = webhookRemarkInput.trim();
 
     try {
-      const res = await axios.post(`${API_BASE}/webhook/add`, { webhook: nextKey, key: adminKey });
-      setGlobalWebhookKeys(Array.isArray(res.data?.list) ? res.data.list : []);
+      const res = await axios.post(`${API_BASE}/webhook/add`, { webhook: nextKey, remark, key: adminKey });
+      const list = Array.isArray(res.data?.list) ? res.data.list : [];
+      const items = list.map((item) => {
+        if (typeof item === 'string') return { url: item, remark: '' };
+        return { url: String(item?.url || '').trim(), remark: String(item?.remark || '').trim() };
+      }).filter((item) => item.url);
+      setGlobalWebhookItems(items);
+      setGlobalWebhookKeys(items.map((item) => item.url));
       setKeyInput('');
+      setWebhookRemarkInput('');
     } catch (err) {
       alert('添加全局 Webhook Key 失败: ' + (err.response?.data?.message || err.message));
+    }
+  };
+
+  const handleUpdateWebhookRemark = async (targetKey, newRemark) => {
+    try {
+      const res = await axios.post(`${API_BASE}/webhook/remark`, { webhook: targetKey, remark: newRemark, key: adminKey });
+      const list = Array.isArray(res.data?.list) ? res.data.list : [];
+      const items = list.map((item) => {
+        if (typeof item === 'string') return { url: item, remark: '' };
+        return { url: String(item?.url || '').trim(), remark: String(item?.remark || '').trim() };
+      }).filter((item) => item.url);
+      setGlobalWebhookItems(items);
+      setGlobalWebhookKeys(items.map((item) => item.url));
+    } catch (err) {
+      alert('修改备注失败: ' + (err.response?.data?.message || err.message));
     }
   };
 
@@ -252,12 +338,23 @@ const App = () => {
 
     try {
       const res = await axios.post(`${API_BASE}/webhook/remove`, { webhook: targetKey, key: adminKey });
-      const nextGlobalKeys = Array.isArray(res.data?.list) ? res.data.list : [];
-      setGlobalWebhookKeys(nextGlobalKeys);
+      const list = Array.isArray(res.data?.list) ? res.data.list : [];
+      const items = list.map((item) => {
+        if (typeof item === 'string') return { url: item, remark: '' };
+        return { url: String(item?.url || '').trim(), remark: String(item?.remark || '').trim() };
+      }).filter((item) => item.url);
+      setGlobalWebhookItems(items);
+      setGlobalWebhookKeys(items.map((item) => item.url));
       setPushKeys((prev) => prev.filter((item) => item !== targetKey));
     } catch (err) {
       alert('删除全局 Webhook Key 失败: ' + (err.response?.data?.message || err.message));
     }
+  };
+
+  const getWebhookDisplayName = (url) => {
+    const item = globalWebhookItems.find((it) => it.url === url);
+    if (item && item.remark) return item.remark;
+    return url;
   };
 
   const handleTogglePushKey = (targetKey) => {
@@ -276,6 +373,7 @@ const App = () => {
     data.key = adminKey;
     data.keys = normalizedKeys.join('\n');
     data.hide_title = data.hide_title ? 1 : 0;
+    data.bad_keyword_save = data.bad_keyword_save ? 1 : 0;
 
     const endpoint = currentTask ? '/task/modify' : '/task/add';
     if (currentTask) data.id = currentTask.id;
@@ -437,6 +535,87 @@ const App = () => {
             ))}
           </div>
         )}
+        {/* Webhook 配置模块 */}
+        <section className="mt-8 bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowWebhookConfig((prev) => !prev)}
+            className="w-full px-5 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
+          >
+            <div className="text-left">
+              <h3 className="text-sm font-bold text-slate-800">Webhook 配置</h3>
+              <p className="text-xs text-slate-500 mt-0.5">管理全局 Webhook Key 列表及备注，添加 RSS 任务时会显示备注名</p>
+            </div>
+            <ChevronRight
+              size={18}
+              className={`text-slate-500 transition-transform ${showWebhookConfig ? 'rotate-90' : ''}`}
+            />
+          </button>
+
+          {showWebhookConfig ? (
+            <div className="border-t border-slate-100 p-4">
+              <div className="flex gap-2 mb-4">
+                <input
+                  type="url"
+                  value={keyInput}
+                  onChange={(e) => setKeyInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddGlobalWebhookKey();
+                    }
+                  }}
+                  placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
+                  className="flex-[2] px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none font-mono text-xs"
+                />
+                <input
+                  type="text"
+                  value={webhookRemarkInput}
+                  onChange={(e) => setWebhookRemarkInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddGlobalWebhookKey();
+                    }
+                  }}
+                  placeholder="备注名"
+                  className="w-28 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddGlobalWebhookKey}
+                  className="px-4 py-3 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors"
+                >
+                  添加
+                </button>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2 min-h-[60px]">
+                {globalWebhookItems.length === 0 ? (
+                  <p className="text-xs text-slate-400">暂无全局 Webhook Key，请添加</p>
+                ) : (
+                  globalWebhookItems.map((item, index) => (
+                    <div key={`${item.url}-${index}`} className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 group">
+                      <span className="flex-1 break-all font-mono text-xs text-slate-700" title={item.url}>{item.remark ? `${item.remark} (${item.url})` : item.url}</span>
+                      <EditableRemark
+                        currentRemark={item.remark}
+                        onSave={(newRemark) => handleUpdateWebhookRemark(item.url, newRemark)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveGlobalWebhookKey(item.url)}
+                        className="shrink-0 rounded-lg p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                        title="删除"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          ) : null}
+        </section>
+
         {/* Backend Logs */}
         <section className="mt-8 bg-white rounded-2xl border border-slate-200 overflow-hidden">
           <button
@@ -488,6 +667,11 @@ const App = () => {
                 <input required name="feed" defaultValue={currentTask?.feed} placeholder="https://..." className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none" />
               </div>
 
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700">名称 (留空则自动获取 RSS 标题)</label>
+                <input name="title" defaultValue={currentTask?.title} placeholder={currentTask?.title || '自动从 RSS 获取'} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none" />
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">检查间隔 (分钟)</label>
@@ -502,35 +686,14 @@ const App = () => {
               </div>
 
               <div className="space-y-3">
-                <label className="text-sm font-bold text-slate-700">全局 Webhook Key 列表</label>
-                <div className="flex gap-2">
-                  <input
-                    type="url"
-                    value={keyInput}
-                    onChange={(e) => setKeyInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleAddGlobalWebhookKey();
-                      }
-                    }}
-                    placeholder="https://example.com/webhook"
-                    className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAddGlobalWebhookKey}
-                    className="px-4 py-3 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors"
-                  >
-                    添加到全局列表
-                  </button>
-                </div>
+                <label className="text-sm font-bold text-slate-700">选择推送 Webhook Key</label>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2 min-h-[84px]">
                   {globalWebhookKeys.length === 0 ? (
-                    <p className="text-xs text-slate-400">暂无全局 Webhook Key，请先添加</p>
+                    <p className="text-xs text-slate-400">暂无全局 Webhook Key，请先在主页 Webhook 配置中添加</p>
                   ) : (
                     globalWebhookKeys.map((item, index) => {
                       const checked = pushKeys.includes(item);
+                      const displayName = getWebhookDisplayName(item);
                       return (
                         <label key={`${item}-${index}`} className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 cursor-pointer hover:border-indigo-200 transition-colors">
                           <input
@@ -539,25 +702,13 @@ const App = () => {
                             onChange={() => handleTogglePushKey(item)}
                             className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                           />
-                          <span className="flex-1 break-all font-mono text-xs text-slate-700">{item}</span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleRemoveGlobalWebhookKey(item);
-                            }}
-                            className="shrink-0 rounded-lg p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition-colors"
-                            title="从全局列表删除"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          <span className="flex-1 text-xs font-medium text-slate-700">{displayName}</span>
                         </label>
                       );
                     })
                   )}
                 </div>
-                <p className="text-xs text-slate-500">先维护全局 Webhook Key 列表，再为当前任务勾选一个或多个推送目标。</p>
+                <p className="text-xs text-slate-500">可在主页「Webhook 配置」模块中管理列表和备注。</p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -566,9 +717,16 @@ const App = () => {
                   <input name="keyword" defaultValue={currentTask?.keyword} placeholder="a,b,c" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">关键词黑名单 (英文逗号分隔，命中则不推送并保存到本地)</label>
+                  <label className="text-sm font-bold text-slate-700">关键词黑名单 (英文逗号分隔，命中则不推送)</label>
                   <input name="bad_keyword" defaultValue={currentTask?.bad_keyword} placeholder="x,y,z" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all outline-none" />
                 </div>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 cursor-pointer py-1.5 group">
+                  <input type="checkbox" name="bad_keyword_save" defaultChecked={currentTask?.bad_keyword_save === undefined ? true : currentTask?.bad_keyword_save > 0} className="w-5 h-5 rounded-md border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                  <span className="text-sm font-bold text-slate-700 group-hover:text-indigo-600">黑名单命中后保存到本地</span>
+                </label>
               </div>
 
               <div className="space-y-2">
