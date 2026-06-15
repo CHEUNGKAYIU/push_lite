@@ -164,18 +164,20 @@ function isBadKeywordSaveEnabled(task) {
   return Number.isNaN(n) ? true : n > 0;
 }
 
-function passKeywordFilter(task, title = "") {
+function passKeywordFilter(task, title = "", content = "") {
   const lowerTitle = String(title).toLowerCase();
+  const lowerContent = String(content).toLowerCase();
+  const searchableText = `${lowerTitle}\n${lowerContent}`;
 
   // 1. 先检查黑名单
   if (task.bad_keyword) {
     const badKeywords = task.bad_keyword.toLowerCase().split(",").map(k => k.trim()).filter(Boolean);
-    const badMatched = badKeywords.some((keyword) => lowerTitle.indexOf(keyword) >= 0);
-    if (badMatched) {
+    const matchedBadKeyword = badKeywords.find((keyword) => searchableText.indexOf(keyword) >= 0);
+    if (matchedBadKeyword) {
       if (isBadKeywordSaveEnabled(task)) {
-        return { pass: false, action: "save_local", message: `命中黑名单 "${task.bad_keyword}"，已保存到本地` };
+        return { pass: false, action: "save_local", message: `命中黑名单 "${matchedBadKeyword}"，已保存到本地` };
       }
-      return { pass: false, action: "discard", message: `命中黑名单 "${task.bad_keyword}"，已丢弃` };
+      return { pass: false, action: "discard", message: `命中黑名单 "${matchedBadKeyword}"，已丢弃` };
     }
   }
 
@@ -659,7 +661,7 @@ async function processTask(task, isTest = false, options = {}) {
       imageKeyMap,
     });
 
-    const keywordCheck = passKeywordFilter(task, last.title || "");
+    const keywordCheck = passKeywordFilter(task, last.title || "", desp);
     if (!keywordCheck.pass) {
       if (keywordCheck.action === "save_local") {
         const contentId = normalizeContentId(last);
