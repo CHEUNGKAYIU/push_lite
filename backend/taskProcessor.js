@@ -677,7 +677,7 @@ async function processTask(task, isTest = false, options = {}) {
 
     // 推送成功后，更新 last_contents 以防止重复推送
     if (!isTest) {
-      const maxHistory = 20;
+      const maxHistory = 50;
       const dedupedLatestIds = [];
       const pushedContentId = normalizeContentId(last);
       
