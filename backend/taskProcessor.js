@@ -679,6 +679,14 @@ async function processTask(task, isTest = false, options = {}) {
     if (!isTest) {
       const maxHistory = 20;
       const dedupedLatestIds = [];
+      const pushedContentId = normalizeContentId(last);
+      
+      // 先添加本次推送的内容ID，确保不会重复推送
+      if (pushedContentId) {
+        dedupedLatestIds.push(pushedContentId);
+      }
+      
+      // 再添加RSS中的前N条（去重）
       for (const item of allItems) {
         const id = normalizeContentId(item);
         if (!id) continue;
