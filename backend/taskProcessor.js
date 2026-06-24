@@ -590,29 +590,13 @@ async function processTask(task, isTest = false, options = {}) {
       return !currentSeenSet.has(id);
     });
 
-    if (!isTest) {
-      const nextSeenSet = new Set(currentSeenSet);
-      if (latestContentId) {
-        nextSeenSet.add(latestContentId);
-      }
-
-      const maxHistory = 20;
-      const dedupedLatestIds = [];
-      for (const item of allItems) {
-        const id = normalizeContentId(item);
-        if (!id) continue;
-        if (dedupedLatestIds.includes(id)) continue;
-        dedupedLatestIds.push(id);
-        if (dedupedLatestIds.length >= maxHistory) break;
-      }
-
-      task.last_time = dayjs().tz().format("YYYY-MM-DD HH:mm:ss");
-      task.last_content = latestContentId || task.last_content || "";
-      task.last_contents = dedupedLatestIds;
-    }
-
     const effectiveItem = newItem || (isTest ? latestItem : null);
     if (!effectiveItem) {
+      // 没有新内容时，只更新 last_time，不更新 last_contents
+      // 这样可以防止旧内容因为暂时不在前20条而被遗忘，导致重复推送
+      if (!isTest) {
+        task.last_time = dayjs().tz().format("YYYY-MM-DD HH:mm:ss");
+      }
       return {
         success: false,
         skipped: true,
@@ -689,6 +673,23 @@ async function processTask(task, isTest = false, options = {}) {
       const ret = await sendByKey({ skey, task, last, text, desp, contentRows });
       console.log("发送结果", ret);
       sendResults.push({ skey, result: ret });
+    }
+
+    // 推送成功后，更新 last_contents 以防止重复推送
+    if (!isTest) {
+      const maxHistory = 20;
+      const dedupedLatestIds = [];
+      for (const item of allItems) {
+        const id = normalizeContentId(item);
+        if (!id) continue;
+        if (dedupedLatestIds.includes(id)) continue;
+        dedupedLatestIds.push(id);
+        if (dedupedLatestIds.length >= maxHistory) break;
+      }
+      
+      task.last_time = dayjs().tz().format("YYYY-MM-DD HH:mm:ss");
+      task.last_content = latestContentId || task.last_content || "";
+      task.last_contents = dedupedLatestIds;
     }
 
     return { success: true, sendResults };
